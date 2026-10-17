@@ -1,0 +1,130 @@
+resources:
+  jobs:
+    strideforge_medallion:
+      name: strideforge_medallion
+      description: >
+        Bronze -> silver -> gold for the StrideForge CDP: conformance, identity resolution, Customer 360,
+        propensity scores, audiences/triggers for activation, and campaign measurement.
+      tags:
+        project: strideforge_cdp
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 5 * * ?"
+        timezone_id: UTC
+        pause_status: PAUSED
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+      tasks:
+        # ---------------- silver
+        - task_key: ensure_tables
+          environment_key: default
+          spark_python_task: &sql
+            python_file: ../src/run_sql.py
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         --gold, "${var.gold_schema}", --truth, "${var.truth_schema}", ddl/02_silver.sql, ddl/03_gold.sql]
+
+        - task_key: silver_reference
+          depends_on: [{task_key: ensure_tables}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         --gold, "${var.gold_schema}", silver/00_functions.sql, silver/01_reference.sql]
+
+        - task_key: silver_identity_resolution
+          depends_on: [{task_key: silver_reference}]
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/silver/02_identity_resolution.py
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         --truth, "${var.truth_schema}"]
+
+        - task_key: silver_commerce
+          depends_on: [{task_key: silver_identity_resolution}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         silver/03_commerce.sql]
+
+        - task_key: silver_behavior
+          depends_on: [{task_key: silver_identity_resolution}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         silver/04_behavior.sql]
+
+        - task_key: silver_loyalty_sport
+          depends_on: [{task_key: silver_identity_resolution}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         silver/05_loyalty_sport.sql]
+
+        - task_key: silver_marketing
+          depends_on: [{task_key: silver_commerce}, {task_key: silver_behavior}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         silver/06_marketing.sql]
+
+        - task_key: silver_service
+          depends_on: [{task_key: silver_commerce}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         silver/07_service.sql]
+
+        - task_key: silver_ai_review_enrichment
+          depends_on: [{task_key: silver_service}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --silver, "${var.silver_schema}", silver/07b_ai_enrichment.sql]
+
+        - task_key: silver_customer_enrichment
+          depends_on: [{task_key: silver_commerce}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         silver/08_customer_enrichment.sql]
+
+        # ---------------- gold
+        - task_key: gold_customer_360
+          depends_on: [{task_key: silver_customer_enrichment}, {task_key: silver_marketing}, {task_key: silver_loyalty_sport},
+                       {task_key: silver_ai_review_enrichment}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --silver, "${var.silver_schema}", --gold, "${var.gold_schema}",
+                         gold/01_customer_360.sql]
+
+        - task_key: gold_predictions_products
+          depends_on: [{task_key: gold_customer_360}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --silver, "${var.silver_schema}", --gold, "${var.gold_schema}",
+                         gold/02_predictions_products.sql]
+
+        - task_key: gold_audiences
+          depends_on: [{task_key: gold_predictions_products}]
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/gold/03_audiences.py
+            parameters: [--catalog, "${var.catalog}", --silver, "${var.silver_schema}", --gold, "${var.gold_schema}"]
+
+        - task_key: gold_measurement
+          depends_on: [{task_key: gold_customer_360}]
+          environment_key: default
+          spark_python_task:
+            <<: *sql
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         --gold, "${var.gold_schema}", gold/04_measurement.sql]

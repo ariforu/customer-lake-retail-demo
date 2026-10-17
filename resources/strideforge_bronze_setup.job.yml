@@ -1,0 +1,44 @@
+resources:
+  jobs:
+    strideforge_bronze_setup:
+      name: strideforge_bronze_setup
+      description: >
+        Creates the StrideForge bronze/silver/gold schemas and tables, then generates the synthetic bronze layer
+        (1.5M customers at scale=1.0). Run once per workspace before strideforge_medallion.
+      tags:
+        project: strideforge_cdp
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+        - environment_key: generator
+          spec:
+            environment_version: "4"
+            dependencies:
+              - faker
+      tasks:
+        - task_key: create_tables
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
+                         --gold, "${var.gold_schema}", ddl/01_bronze.sql, ddl/02_silver.sql, ddl/03_gold.sql]
+
+        - task_key: generate_bronze
+          depends_on:
+            - task_key: create_tables
+          environment_key: generator
+          timeout_seconds: 14400
+          spark_python_task:
+            python_file: ../src/generator/generate_bronze.py
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --truth, "${var.truth_schema}",
+                         --scale, "${var.scale}"]
+
+        - task_key: validate_stories
+          depends_on:
+            - task_key: generate_bronze
+          environment_key: generator
+          spark_python_task:
+            python_file: ../src/generator/validate_bronze.py
+            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --truth, "${var.truth_schema}"]

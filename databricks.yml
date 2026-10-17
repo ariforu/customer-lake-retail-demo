@@ -1,0 +1,36 @@
+bundle:
+  name: strideforge-cdp
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog that holds all StrideForge schemas
+    default: customer_lake_si
+  bronze_schema:
+    default: retail_bronze
+  silver_schema:
+    default: retail_silver
+  gold_schema:
+    default: retail_gold
+  truth_schema:
+    description: Generator scratch tables + identity answer key
+    default: retail_synthetic_truth
+  scale:
+    description: Bronze generator scale (1.0 = 1.5M customers, ~274M rows; 0.01 = quick smoke test)
+    default: "1.0"
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: https://fevm-serverless-stable-arijit.cloud.databricks.com
+
+  # Replicate into another workspace:
+  #   databricks bundle deploy -t prod --var catalog=<catalog>   (host via --profile or DATABRICKS_HOST)
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
