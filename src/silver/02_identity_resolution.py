@@ -1,28 +1,35 @@
-"""Identity resolution: source profiles -> match pairs -> connected components -> identity graph -> golden customer.
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 02 - Identity resolution
+# MAGIC
+# MAGIC Identity resolution: source profiles -> match pairs -> connected components -> identity graph -> golden customer.
+# MAGIC
+# MAGIC Match rules (accepted when the key is shared by 2..25 records, avoiding hub keys):
+# MAGIC   deterministic: normalized email, E.164 phone, loyalty id, POS transaction card scan, run-app order reference
+# MAGIC   probabilistic: canonical first name + last name + postal code, canonical first name + last name + birth date
+# COMMAND ----------
 
-Match rules (accepted when the key is shared by 2..25 records, avoiding hub keys):
-  deterministic: normalized email, E.164 phone, loyalty id, POS transaction card scan, run-app order reference
-  probabilistic: canonical first name + last name + postal code, canonical first name + last name + birth date
-"""
-import argparse
-import sys
-
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-ap = argparse.ArgumentParser()
-for k, d in [("catalog", "customer_lake_si"), ("bronze", "retail_bronze"), ("silver", "retail_silver"),
-             ("gold", "retail_gold"), ("truth", "retail_synthetic_truth")]:
-    ap.add_argument(f"--{k}", default=d)
-a, _ = ap.parse_known_args(sys.argv[1:])
-spark = SparkSession.builder.getOrCreate()
+for _k, _d in [("catalog", "customer_lake_si"), ("bronze", "retail_bronze"), ("silver", "retail_silver"),
+               ("gold", "retail_gold"), ("truth", "retail_synthetic_truth")]:
+    dbutils.widgets.text(_k, _d)
+
+
+class _Args:
+    pass
+
+
+a = _Args()
+for _k in ["catalog", "bronze", "silver", "gold", "truth"]:
+    setattr(a, _k, dbutils.widgets.get(_k))
 B, S, T = f"{a.catalog}.{a.bronze}", f"{a.catalog}.{a.silver}", f"{a.catalog}.{a.truth}"
 fn = lambda name: f"{S}.{name}"
 
 
 def sql(q):
     return spark.sql(q)
-
+# COMMAND ----------
 
 # ------------------------------------------------------------------ 1. standardized source records
 ADDR = """split({c}, ', ') AS _ap"""
@@ -119,6 +126,7 @@ SELECT source_record_key, source_system, source_id, first_name, last_name,
        loyalty_id, device_id, cookie_id, created_at, updated_at
 FROM ({srcs})""")
 print("source records:", spark.table(f"{S}.customer_source_records").count(), flush=True)
+# COMMAND ----------
 
 # ------------------------------------------------------------------ 2. match pairs
 sql(f"""
@@ -153,6 +161,7 @@ SELECT record_key_a, record_key_b, rule AS match_rule, mtype AS match_type, CAST
        true AS is_accepted, current_timestamp() AS evaluated_at
 FROM (SELECT * FROM star WHERE record_key_a <> record_key_b UNION ALL SELECT * FROM card UNION ALL SELECT * FROM oref)""")
 print("match pairs:", spark.table(f"{S}.identity_match_pairs").count(), flush=True)
+# COMMAND ----------
 
 # ------------------------------------------------------------------ 3. connected components (min-label propagation)
 E = spark.table(f"{S}.identity_match_pairs").where("is_accepted").select(F.col("record_key_a").alias("a"), F.col("record_key_b").alias("b"))
@@ -183,6 +192,7 @@ spark.table(f"{S}._ir_labels_{cur}").select(
     F.col("node").alias("source_record_key"),
     F.concat(F.lit("UC"), F.upper(F.substring(F.sha2("label", 256), 1, 12))).alias("unified_customer_id")) \
     .write.mode("overwrite").saveAsTable(f"{S}._ir_resolved")
+# COMMAND ----------
 
 # ------------------------------------------------------------------ 4. identity graph
 sql(f"""
@@ -212,6 +222,7 @@ SELECT unified_customer_id, source_record_key, source_system, id_type, id_value,
        row_number() OVER (PARTITION BY unified_customer_id, id_type ORDER BY last_seen DESC NULLS LAST) = 1 AS is_primary,
        first_seen, last_seen, current_timestamp() AS resolved_at
 FROM ids""")
+# COMMAND ----------
 
 # ------------------------------------------------------------------ 5. golden customer record (survivorship)
 sql(f"""
@@ -242,6 +253,7 @@ SELECT unified_customer_id, first_name, last_name, email, phone_e164, birth_date
        first_seen_at, last_seen_at, current_timestamp() AS updated_at
 FROM g""")
 print("unified customers:", spark.table(f"{S}.customers").count(), flush=True)
+# COMMAND ----------
 
 # ------------------------------------------------------------------ 6. score against the synthetic answer key (if present)
 if spark.catalog.tableExists(f"{T}.identity_answer_key_profiles"):

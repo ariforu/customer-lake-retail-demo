@@ -1,9 +1,43 @@
--- Silver service + voice of customer (rule-based enrichment; 07b_ai_enrichment.sql upgrades recent reviews with AI Functions)
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 07 - Service & voice of customer
+# MAGIC
+# MAGIC Silver service + voice of customer (rule-based enrichment; 07b_ai_enrichment.sql upgrades recent reviews with AI Functions)
+# MAGIC
+# MAGIC _Generated from `07_service.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `idmap`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW idmap AS
 SELECT id_type, id_value, min(unified_customer_id) AS unified_customer_id
-FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value;
+FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `service_tickets`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.service_tickets BY NAME
 SELECT t.ticket_id, coalesce(m1.unified_customer_id, m2.unified_customer_id, o.unified_customer_id) AS unified_customer_id,
        t.channel, t.subject, t.description, t.category, t.priority, t.status, t.order_reference AS order_id,
@@ -14,8 +48,15 @@ SELECT t.ticket_id, coalesce(m1.unified_customer_id, m2.unified_customer_id, o.u
 FROM ${catalog}.${bronze}.service_tickets_raw t
 LEFT JOIN idmap m1 ON m1.id_type = 'email' AND m1.id_value = ${catalog}.${silver}.norm_email(t.requester_email)
 LEFT JOIN idmap m2 ON m2.id_type = 'phone' AND m2.id_value = ${catalog}.${silver}.norm_phone(t.requester_phone)
-LEFT JOIN ${catalog}.${silver}.orders o ON o.order_id = t.order_reference;
+LEFT JOIN ${catalog}.${silver}.orders o ON o.order_id = t.order_reference
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `surveys`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.surveys BY NAME
 SELECT c.survey_response_id, m.unified_customer_id, 'csat' AS survey_type, 'support_ticket' AS touchpoint, c.ticket_id,
        c.csat_score AS score, CAST(NULL AS STRING) AS nps_category, c.comment,
@@ -29,8 +70,15 @@ SELECT n.survey_response_id, m.unified_customer_id, 'nps', n.touchpoint, NULL, n
        CASE WHEN n.nps_score >= 9 THEN 'positive' WHEN n.nps_score >= 7 THEN 'neutral' ELSE 'negative' END,
        CAST(n.response_ts AS TIMESTAMP)
 FROM ${catalog}.${bronze}.nps_surveys_raw n
-LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(n.respondent_email);
+LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(n.respondent_email)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `product_reviews`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.product_reviews BY NAME
 SELECT r.review_id, m.unified_customer_id, r.sku, r.style_id, r.rating, r.title, r.review_text, r.fit_rating,
        r.verified_purchase, CAST(r.submitted_ts AS TIMESTAMP) AS submitted_at,
@@ -45,4 +93,5 @@ SELECT r.review_id, m.unified_customer_id, r.sku, r.style_id, r.rating, r.title,
             WHEN lower(r.review_text) RLIKE 'runs a little big|sizing down|heel slips' THEN 'runs_large'
             ELSE 'true_to_size' END AS ai_fit_feedback
 FROM ${catalog}.${bronze}.product_reviews_raw r
-LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(r.reviewer_email);
+LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(r.reviewer_email)
+""")

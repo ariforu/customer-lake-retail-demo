@@ -1,14 +1,55 @@
--- Silver customer enrichment (needs identity + commerce): addresses, households, fit profile, consent
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 08 - Customer enrichment
+# MAGIC
+# MAGIC Silver customer enrichment (needs identity + commerce): addresses, households, fit profile, consent
+# MAGIC
+# MAGIC _Generated from `08_customer_enrichment.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `idmap`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW idmap AS
 SELECT id_type, id_value, min(unified_customer_id) AS unified_customer_id
-FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value;
+FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `rec`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW rec AS
 SELECT c.*, g.unified_customer_id
 FROM ${catalog}.${silver}.customer_source_records c
-JOIN (SELECT DISTINCT source_record_key, unified_customer_id FROM ${catalog}.${silver}.identity_graph) g USING (source_record_key);
+JOIN (SELECT DISTINCT source_record_key, unified_customer_id FROM ${catalog}.${silver}.identity_graph) g USING (source_record_key)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `customer_addresses`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.customer_addresses BY NAME
 WITH a AS (
   SELECT unified_customer_id, address_standardized, source_system, address_line1, city, state, postal_code, country,
@@ -26,8 +67,15 @@ SELECT concat('AD', upper(substr(sha2(concat(unified_customer_id, '|', address_s
        row_number() OVER (PARTITION BY unified_customer_id ORDER BY updated_at DESC) = 1 AS is_primary,
        postal_code RLIKE '^([0-9]{5}|[A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}|[A-Z][0-9][A-Z] [0-9][A-Z][0-9])$' AS is_valid,
        source_system, updated_at
-FROM d;
+FROM d
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `households`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.households BY NAME
 WITH p AS (
   SELECT a.unified_customer_id, concat_ws('|', ${catalog}.${silver}.std_street(a.address_line1), upper(replace(a.postal_code, ' ', ''))) AS hkey,
@@ -44,8 +92,15 @@ SELECT concat('HH', upper(substr(sha2(p.hkey, 256), 1, 12))) AS household_id, mi
        CAST(count(DISTINCT p.unified_customer_id) AS INT) AS adult_count,
        CAST(size(array_distinct(flatten(collect_list(coalesce(kids.bands, array()))))) AS INT) AS kids_count,
        array_distinct(flatten(collect_list(coalesce(kids.bands, array())))) AS kids_age_bands, current_timestamp() AS updated_at
-FROM p LEFT JOIN kids USING (unified_customer_id) GROUP BY p.hkey;
+FROM p LEFT JOIN kids USING (unified_customer_id) GROUP BY p.hkey
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Merge `customers`
+# COMMAND ----------
+
+run(r"""
 MERGE INTO ${catalog}.${silver}.customers c
 USING (
   WITH pa AS (SELECT unified_customer_id, address_id,
@@ -61,8 +116,15 @@ USING (
   LEFT JOIN reg USING (unified_customer_id)) s
 ON c.unified_customer_id = s.unified_customer_id
 WHEN MATCHED THEN UPDATE SET c.primary_address_id = s.address_id, c.household_id = s.household_id,
-                             c.home_store_id = s.home_store_id, c.updated_at = current_timestamp();
+                             c.home_store_id = s.home_store_id, c.updated_at = current_timestamp()
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `customer_fit_profile`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.customer_fit_profile BY NAME
 WITH fw AS (
   SELECT l.unified_customer_id, k.size_us, k.width
@@ -98,8 +160,15 @@ SELECT u.unified_customer_id, coalesce(try_cast(gait.rec_size AS DOUBLE), fws.sh
        CASE WHEN gait.unified_customer_id IS NOT NULL THEN 0.95 ELSE coalesce(conf.c, 0.5) END AS size_confidence,
        gait.last_gait AS last_gait_analysis_at, current_timestamp() AS updated_at
 FROM u LEFT JOIN fws USING (unified_customer_id) LEFT JOIN conf USING (unified_customer_id) LEFT JOIN ap USING (unified_customer_id)
-LEFT JOIN gait USING (unified_customer_id);
+LEFT JOIN gait USING (unified_customer_id)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `consent`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.consent BY NAME
 WITH e AS (
   SELECT coalesce(m1.unified_customer_id, m2.unified_customer_id, m3.unified_customer_id) AS unified_customer_id,
@@ -118,4 +187,5 @@ WITH e AS (
 SELECT unified_customer_id, channel, purpose, max_by(status, effective_at) AS status, max_by(jurisdiction, effective_at) AS jurisdiction,
        max_by(policy_version, effective_at) AS policy_version, max_by(capture_source, effective_at) AS capture_source,
        max(effective_at) AS effective_at, current_timestamp() AS updated_at
-FROM e WHERE unified_customer_id IS NOT NULL GROUP BY unified_customer_id, channel, purpose;
+FROM e WHERE unified_customer_id IS NOT NULL GROUP BY unified_customer_id, channel, purpose
+""")

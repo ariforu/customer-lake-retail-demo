@@ -1,19 +1,60 @@
--- Reusable standardization functions used by identity resolution and conformance
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 00 - Standardization functions
+# MAGIC
+# MAGIC Reusable standardization functions used by identity resolution and conformance
+# MAGIC
+# MAGIC _Generated from `00_functions.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `fix_email_domain`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.fix_email_domain(d STRING) RETURNS STRING
 COMMENT 'Corrects common email domain typos'
 RETURN CASE d WHEN 'gmial.com' THEN 'gmail.com' WHEN 'yaho.com' THEN 'yahoo.com' WHEN 'hotmial.com' THEN 'hotmail.com'
   WHEN 'outlok.com' THEN 'outlook.com' WHEN 'icloud.co' THEN 'icloud.com' WHEN 'gmx.d' THEN 'gmx.de'
-  WHEN 'wbe.de' THEN 'web.de' ELSE d END;
+  WHEN 'wbe.de' THEN 'web.de' ELSE d END
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `norm_email`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.norm_email(e STRING) RETURNS STRING
 COMMENT 'Lower-case, trim, drop +tags, fix domain typos, remove gmail dots'
 RETURN CASE WHEN e IS NULL OR instr(e, '@') = 0 THEN NULL ELSE concat(
   CASE WHEN ${catalog}.${silver}.fix_email_domain(split_part(lower(trim(e)), '@', 2)) = 'gmail.com'
        THEN replace(regexp_replace(split_part(lower(trim(e)), '@', 1), '[+].*$', ''), '.', '')
        ELSE regexp_replace(split_part(lower(trim(e)), '@', 1), '[+].*$', '') END,
-  '@', ${catalog}.${silver}.fix_email_domain(split_part(lower(trim(e)), '@', 2))) END;
+  '@', ${catalog}.${silver}.fix_email_domain(split_part(lower(trim(e)), '@', 2))) END
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `norm_phone`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.norm_phone(p STRING) RETURNS STRING
 COMMENT 'Normalize US/CA/UK/DE phone formats to E.164'
 RETURN CASE
@@ -26,12 +67,26 @@ RETURN CASE
   WHEN regexp_replace(p, '[^0-9]', '') LIKE '07%' AND length(regexp_replace(p, '[^0-9]', '')) = 11
     THEN concat('+44', substr(regexp_replace(p, '[^0-9]', ''), 2))
   WHEN regexp_replace(p, '[^0-9]', '') LIKE '01%' THEN concat('+49', substr(regexp_replace(p, '[^0-9]', ''), 2))
-  ELSE NULL END;
+  ELSE NULL END
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `norm_name`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.norm_name(s STRING) RETURNS STRING
 COMMENT 'Lower-case letters only'
-RETURN nullif(regexp_replace(lower(trim(s)), '[^\\p{L}]', ''), '');
+RETURN nullif(regexp_replace(lower(trim(s)), '[^\\p{L}]', ''), '')
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `canon_first_name`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.canon_first_name(s STRING) RETURNS STRING
 COMMENT 'Maps common nicknames to canonical first names'
 RETURN CASE ${catalog}.${silver}.norm_name(s)
@@ -41,19 +96,41 @@ RETURN CASE ${catalog}.${silver}.norm_name(s)
   WHEN 'tony' THEN 'anthony' WHEN 'alex' THEN 'alexander' WHEN 'sam' THEN 'samantha' WHEN 'nick' THEN 'nicholas'
   WHEN 'becky' THEN 'rebecca' WHEN 'ben' THEN 'benjamin' WHEN 'maggie' THEN 'margaret' WHEN 'jim' THEN 'james'
   WHEN 'rick' THEN 'richard' WHEN 'pat' THEN 'patricia' WHEN 'steph' THEN 'stephanie' WHEN 'andy' THEN 'andrew'
-  WHEN 'jon' THEN 'jonathan' ELSE ${catalog}.${silver}.norm_name(s) END;
+  WHEN 'jon' THEN 'jonathan' ELSE ${catalog}.${silver}.norm_name(s) END
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `std_street`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.std_street(s STRING) RETURNS STRING
 COMMENT 'Standardized street line for address matching'
 RETURN nullif(trim(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
   regexp_replace(lower(s), '[.,#]', ' '), ' street\\b', ' st'), ' avenue\\b', ' ave'), ' road\\b', ' rd'),
-  ' drive\\b', ' dr'), ' boulevard\\b', ' blvd'), ' lane\\b', ' ln'), '\\s+', ' ')), '');
+  ' drive\\b', ' dr'), ' boulevard\\b', ' blvd'), ' lane\\b', ' ln'), '\\s+', ' ')), '')
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `postal_from_text`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.postal_from_text(s STRING) RETURNS STRING
 COMMENT 'Extracts a US/DE, UK or CA postal code from the end of an address string'
-RETURN nullif(regexp_extract(s, '([A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}|[A-Z][0-9][A-Z] [0-9][A-Z][0-9]|[0-9]{5})$', 1), '');
+RETURN nullif(regexp_extract(s, '([A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}|[A-Z][0-9][A-Z] [0-9][A-Z][0-9]|[0-9]{5})$', 1), '')
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `country_from_postal`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE FUNCTION ${catalog}.${silver}.country_from_postal(p STRING) RETURNS STRING
 COMMENT 'Infers country from postal code shape (5-digit is ambiguous US/DE -> NULL)'
 RETURN CASE WHEN p RLIKE '^[A-Z][0-9][A-Z] [0-9][A-Z][0-9]$' THEN 'CA'
-            WHEN p RLIKE '^[A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}$' THEN 'UK' ELSE NULL END;
+            WHEN p RLIKE '^[A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}$' THEN 'UK' ELSE NULL END
+""")

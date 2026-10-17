@@ -1,15 +1,56 @@
--- Silver loyalty + sport / community
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 05 - Loyalty & sport
+# MAGIC
+# MAGIC Silver loyalty + sport / community
+# MAGIC
+# MAGIC _Generated from `05_loyalty_sport.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `idmap`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW idmap AS
 SELECT id_type, id_value, min(unified_customer_id) AS unified_customer_id
-FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value;
+FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `loyalty_transactions`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.loyalty_transactions BY NAME
 SELECT l.ledger_id, l.loyalty_id, m.unified_customer_id, l.activity_type, l.points, l.reference_id, l.reference_type,
        CAST(l.activity_ts AS TIMESTAMP) AS activity_ts
 FROM ${catalog}.${bronze}.loyalty_points_ledger_raw l
-LEFT JOIN idmap m ON m.id_type = 'loyalty_id' AND m.id_value = l.loyalty_id;
+LEFT JOIN idmap m ON m.id_type = 'loyalty_id' AND m.id_value = l.loyalty_id
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `loyalty_members`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.loyalty_members BY NAME
 WITH lt AS (SELECT loyalty_id, CAST(sum(CASE WHEN points > 0 THEN points ELSE 0 END) AS INT) AS lifetime_points,
                    max(CASE WHEN activity_type = 'tier_change' THEN activity_ts END) AS last_tier_change
@@ -19,8 +60,15 @@ SELECT r.loyalty_id, m.unified_customer_id, r.tier, r.points_balance, coalesce(l
        date_add(to_date(coalesce(lt.last_tier_change, CAST(r.enrolled_ts AS TIMESTAMP))), 365) AS tier_expiry_date, r.status
 FROM ${catalog}.${bronze}.loyalty_members_raw r
 LEFT JOIN lt USING (loyalty_id)
-LEFT JOIN idmap m ON m.id_type = 'loyalty_id' AND m.id_value = r.loyalty_id;
+LEFT JOIN idmap m ON m.id_type = 'loyalty_id' AND m.id_value = r.loyalty_id
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `fitness_activities`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.fitness_activities BY NAME
 SELECT a.activity_id, m.unified_customer_id, a.activity_type, CAST(a.start_ts AS TIMESTAMP) AS start_ts,
        to_date(CAST(a.start_ts AS TIMESTAMP)) AS activity_date, a.duration_seconds, a.distance_km,
@@ -28,8 +76,15 @@ SELECT a.activity_id, m.unified_customer_id, a.activity_type, CAST(a.start_ts AS
        a.shoe_registration_id, s.sku
 FROM ${catalog}.${bronze}.fitness_activities_raw a
 LEFT JOIN ${catalog}.${bronze}.fitness_shoe_registrations_raw s USING (shoe_registration_id)
-LEFT JOIN idmap m ON m.id_type = 'fitness_id' AND m.id_value = a.fitness_user_id;
+LEFT JOIN idmap m ON m.id_type = 'fitness_id' AND m.id_value = a.fitness_user_id
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `shoe_mileage`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.shoe_mileage BY NAME
 WITH act AS (SELECT shoe_registration_id, count(*) AS n, sum(distance_miles) AS miles, max(start_ts) AS last_ts
              FROM ${catalog}.${silver}.fitness_activities WHERE shoe_registration_id IS NOT NULL GROUP BY 1),
@@ -44,17 +99,32 @@ SELECT s.shoe_registration_id, m.unified_customer_id, s.sku, k.style_id, s.order
 FROM ${catalog}.${bronze}.fitness_shoe_registrations_raw s
 LEFT JOIN act USING (shoe_registration_id)
 LEFT JOIN ${catalog}.${silver}.skus k ON k.sku = s.sku
-LEFT JOIN idmap m ON m.id_type = 'fitness_id' AND m.id_value = s.fitness_user_id;
+LEFT JOIN idmap m ON m.id_type = 'fitness_id' AND m.id_value = s.fitness_user_id
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `event_registrations`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.event_registrations BY NAME
 SELECT e.registration_id, m.unified_customer_id, e.event_id, e.event_name, e.event_type, to_date(e.event_date) AS event_date,
        e.event_city, e.distance_km, CAST(e.registered_ts AS TIMESTAMP) AS registered_at, e.registration_source
 FROM ${catalog}.${bronze}.event_registrations_raw e
-LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(e.email);
+LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(e.email)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `run_club_attendance`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.run_club_attendance BY NAME
 SELECT c.checkin_id, coalesce(m1.unified_customer_id, m2.unified_customer_id) AS unified_customer_id, c.store_id,
        c.club_session_id, CAST(c.checkin_ts AS TIMESTAMP) AS checkin_ts, c.run_distance_km
 FROM ${catalog}.${bronze}.run_club_checkins_raw c
 LEFT JOIN idmap m1 ON m1.id_type = 'loyalty_id' AND m1.id_value = c.loyalty_id
-LEFT JOIN idmap m2 ON m2.id_type = 'email' AND m2.id_value = ${catalog}.${silver}.norm_email(c.email);
+LEFT JOIN idmap m2 ON m2.id_type = 'email' AND m2.id_value = ${catalog}.${silver}.norm_email(c.email)
+""")

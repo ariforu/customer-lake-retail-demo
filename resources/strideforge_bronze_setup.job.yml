@@ -8,37 +8,45 @@ resources:
       tags:
         project: strideforge_cdp
       max_concurrent_runs: 1
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "4"
-        - environment_key: generator
-          spec:
-            environment_version: "4"
-            dependencies:
-              - faker
       tasks:
-        - task_key: create_tables
-          environment_key: default
-          spark_python_task:
-            python_file: ../src/run_sql.py
-            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --silver, "${var.silver_schema}",
-                         --gold, "${var.gold_schema}", ddl/01_bronze.sql, ddl/02_silver.sql, ddl/03_gold.sql]
+        - task_key: ddl_bronze
+          notebook_task:
+            notebook_path: ../src/ddl/01_bronze.py
+            base_parameters: &params
+              catalog: ${var.catalog}
+              bronze: ${var.bronze_schema}
+              silver: ${var.silver_schema}
+              gold: ${var.gold_schema}
+              truth: ${var.truth_schema}
+
+        - task_key: ddl_silver
+          depends_on: [{task_key: ddl_bronze}]
+          notebook_task:
+            notebook_path: ../src/ddl/02_silver.py
+            base_parameters: *params
+
+        - task_key: ddl_gold
+          depends_on: [{task_key: ddl_silver}]
+          notebook_task:
+            notebook_path: ../src/ddl/03_gold.py
+            base_parameters: *params
 
         - task_key: generate_bronze
-          depends_on:
-            - task_key: create_tables
-          environment_key: generator
+          depends_on: [{task_key: ddl_gold}]
           timeout_seconds: 14400
-          spark_python_task:
-            python_file: ../src/generator/generate_bronze.py
-            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --truth, "${var.truth_schema}",
-                         --scale, "${var.scale}"]
+          notebook_task:
+            notebook_path: ../src/generator/generate_bronze.py
+            base_parameters:
+              catalog: ${var.catalog}
+              bronze: ${var.bronze_schema}
+              truth: ${var.truth_schema}
+              scale: ${var.scale}
 
-        - task_key: validate_stories
-          depends_on:
-            - task_key: generate_bronze
-          environment_key: generator
-          spark_python_task:
-            python_file: ../src/generator/validate_bronze.py
-            parameters: [--catalog, "${var.catalog}", --bronze, "${var.bronze_schema}", --truth, "${var.truth_schema}"]
+        - task_key: validate_bronze
+          depends_on: [{task_key: generate_bronze}]
+          notebook_task:
+            notebook_path: ../src/generator/validate_bronze.py
+            base_parameters:
+              catalog: ${var.catalog}
+              bronze: ${var.bronze_schema}
+              truth: ${var.truth_schema}

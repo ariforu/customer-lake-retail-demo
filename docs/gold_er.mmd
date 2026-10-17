@@ -1,0 +1,117 @@
+erDiagram
+  customer_profile ||--|| customer_consent : "contactability gate"
+  customer_profile ||--|| customer_traits : "behaviour"
+  customer_profile ||--|| customer_predictions : "scores"
+  customer_profile ||--o{ customer_identity_map : "identifiers"
+  customer_profile ||--o{ customer_product_recommendations : "top-5"
+  customer_profile ||--o{ segment_membership : "member of"
+  customer_profile ||--o{ trigger_events : "triggers"
+  customer_profile ||--o{ audience_exports : "synced"
+  customer_profile ||--o{ customer_daily_snapshot : "history"
+  customer_profile ||--o{ campaign_attribution : "orders"
+  segment_definitions ||--o{ segment_membership : "rule produces"
+  segment_definitions ||--o{ audience_exports : "exported as"
+  segment_definitions ||--o{ drop_calendar : "eligible audience"
+  product_catalog_enriched ||--o{ customer_product_recommendations : "sku"
+  product_catalog_enriched ||--o{ trigger_events : "sku"
+  product_catalog_enriched ||--o{ product_affinity : "style_id"
+  customer_predictions }o--o| product_catalog_enriched : "next_best_style_id"
+  campaign_performance ||--o{ campaign_attribution : "campaign_id"
+  campaign_performance ||--o| campaign_holdout_results : "campaign_id"
+  campaign_performance ||--o{ audience_exports : "campaign_id"
+  campaign_performance ||--o{ trigger_events : "campaign_id"
+
+  customer_profile {
+    string unified_customer_id PK
+    string email
+    string loyalty_tier
+    double shoe_size_us
+    boolean email_contactable
+    boolean paid_media_eligible
+  }
+  customer_consent {
+    string unified_customer_id PK
+    boolean email_marketing
+    boolean paid_media_targeting
+    boolean global_suppression
+  }
+  customer_traits {
+    string unified_customer_id PK
+    string rfm_segment
+    string lifecycle_stage
+    map sport_affinity
+    double run_miles_90d
+  }
+  customer_predictions {
+    string unified_customer_id PK
+    decimal predicted_clv_12m
+    double churn_probability
+    date predicted_shoe_replacement_date
+    string next_best_style_id FK
+  }
+  customer_identity_map {
+    string unified_customer_id FK
+    string id_type
+    string id_value
+  }
+  customer_product_recommendations {
+    string unified_customer_id FK
+    int rank
+    string sku FK
+  }
+  segment_definitions {
+    string segment_id PK
+    string rule_sql
+  }
+  segment_membership {
+    string segment_id FK
+    string unified_customer_id FK
+    boolean is_holdout
+  }
+  trigger_events {
+    string trigger_id PK
+    string unified_customer_id FK
+    string trigger_type
+    string sku FK
+    string campaign_id FK
+  }
+  audience_exports {
+    string export_id PK
+    string segment_id FK
+    string unified_customer_id FK
+    string destination
+    string campaign_id FK
+  }
+  product_catalog_enriched {
+    string sku PK
+    string style_id
+    string stock_status
+  }
+  product_affinity {
+    string antecedent_style_id FK
+    string consequent_style_id FK
+    double lift
+  }
+  drop_calendar {
+    string drop_id PK
+    string eligible_segment_id FK
+  }
+  customer_daily_snapshot {
+    date snapshot_date
+    string unified_customer_id FK
+  }
+  campaign_performance {
+    string campaign_id
+    date report_date
+    decimal attributed_revenue
+  }
+  campaign_attribution {
+    string order_id
+    string unified_customer_id FK
+    string campaign_id FK
+    string attribution_model
+  }
+  campaign_holdout_results {
+    string campaign_id FK
+    double incremental_lift_pct
+  }

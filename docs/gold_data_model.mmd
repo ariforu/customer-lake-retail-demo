@@ -1,0 +1,63 @@
+flowchart LR
+  classDef cdp fill:#E8F1FB,stroke:#1F6FB2,stroke-width:1.5px,color:#0B2E4F
+  classDef core fill:#1F6FB2,stroke:#0B2E4F,stroke-width:2px,color:#FFFFFF
+  classDef ana fill:#F4F4F4,stroke:#8A8A8A,stroke-width:1px,color:#333333
+  classDef ext fill:#FFF6E5,stroke:#C98A00,stroke-width:1px,color:#5A3E00
+
+  subgraph ACT["CDP activation contract  (cdp_activation = true)"]
+    direction LR
+    subgraph C360["Customer 360  -  1 row per unified_customer_id"]
+      direction TB
+      PROFILE["customer_profile<br/><i>who: PII, address, fit, loyalty, contactability</i>"]:::core
+      CONSENT["customer_consent<br/><i>may we contact them</i>"]:::cdp
+      TRAITS["customer_traits<br/><i>what they did: RFM, affinities, run miles</i>"]:::cdp
+      PRED["customer_predictions<br/><i>what they'll do: CLV, churn, replacement date</i>"]:::cdp
+    end
+    IDMAP["customer_identity_map<br/><i>email/phone hashes, MAIDs, cookies, push tokens</i>"]:::cdp
+    RECS["customer_product_recommendations<br/><i>top-5 in size & in stock</i>"]:::cdp
+    CATALOG["product_catalog_enriched<br/><i>SKU feed: price, stock, rating</i>"]:::cdp
+    SEGDEF["segment_definitions<br/><i>rules as SQL</i>"]:::cdp
+    SEGMEM["segment_membership<br/><i>who is in which audience (+ holdout flag)</i>"]:::cdp
+    TRIG["trigger_events<br/><i>real-time journey triggers</i>"]:::cdp
+    EXPORT["audience_exports<br/><i>what was synced where</i>"]:::cdp
+  end
+
+  subgraph ANA["Analytics & measurement"]
+    direction TB
+    SNAP["customer_daily_snapshot"]:::ana
+    AFF["product_affinity"]:::ana
+    DROPS["drop_calendar"]:::ana
+    ATTR["campaign_attribution"]:::ana
+    PERF["campaign_performance"]:::ana
+    HOLD["campaign_holdout_results"]:::ana
+    COH["cohort_retention"]:::ana
+    KPI["channel_kpis_daily / store_kpis_daily"]:::ana
+    IRS["identity_resolution_stats"]:::ana
+  end
+
+  DEST(["ESP / SMS / Push<br/>Meta / Google / TikTok"]):::ext
+
+  PROFILE ---|"1 : 1"| CONSENT
+  PROFILE ---|"1 : 1"| TRAITS
+  PROFILE ---|"1 : 1"| PRED
+  PROFILE -->|"1 : N  unified_customer_id"| IDMAP
+  PROFILE -->|"1 : N"| RECS
+  PROFILE -->|"1 : N"| SEGMEM
+  PROFILE -->|"1 : N"| TRIG
+  PROFILE -->|"1 : N"| SNAP
+  PROFILE -->|"1 : N"| ATTR
+  CATALOG -->|"sku"| RECS
+  CATALOG -->|"sku"| TRIG
+  PRED -.->|"next_best_style_id"| CATALOG
+  SEGDEF -->|"1 : N  segment_id"| SEGMEM
+  SEGMEM -->|"members - holdout, consent-filtered"| EXPORT
+  CONSENT -.->|"gates every send / sync"| EXPORT
+  IDMAP -.->|"matched_id_type"| EXPORT
+  EXPORT ==> DEST
+  TRIG ==> DEST
+  SEGDEF -->|"eligible_segment_id"| DROPS
+  CATALOG -.->|"style_id"| AFF
+  ATTR -->|"campaign_id"| PERF
+  EXPORT -.->|"campaign_id"| PERF
+  PERF --- HOLD
+  DEST -.->|"engagement write-back -> bronze"| PERF

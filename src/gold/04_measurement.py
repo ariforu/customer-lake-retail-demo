@@ -1,16 +1,65 @@
--- Gold measurement: attribution, campaign performance, holdout lift, cohorts, channel/store KPIs, identity stats
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Gold 04 - Measurement
+# MAGIC
+# MAGIC Gold measurement: attribution, campaign performance, holdout lift, cohorts, channel/store KPIs, identity stats
+# MAGIC
+# MAGIC _Generated from `04_measurement.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `asof`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW asof AS
-SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY AS ts FROM ${catalog}.${silver}.orders;
+SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY AS ts FROM ${catalog}.${silver}.orders
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `fx`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW fx AS
-SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate);
+SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `o_usd`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW o_usd AS
 SELECT o.*, CAST((o.subtotal_amount - o.discount_amount) / fx.rate AS DECIMAL(14, 2)) AS net_usd
-FROM ${catalog}.${silver}.orders o JOIN fx USING (currency);
+FROM ${catalog}.${silver}.orders o JOIN fx USING (currency)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- multi-touch attribution (7-day lookback, last 12 months)
+# MAGIC %md
+# MAGIC ### Insert `campaign_attribution`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- multi-touch attribution (7-day lookback, last 12 months)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.campaign_attribution BY NAME
 WITH od AS (SELECT order_id, unified_customer_id, order_ts, net_usd FROM o_usd
             WHERE unified_customer_id IS NOT NULL AND order_ts > (SELECT ts FROM asof) - INTERVAL 365 DAYS),
@@ -27,9 +76,17 @@ FROM j WHERE rn_last = 1
 UNION ALL
 SELECT order_id, unified_customer_id, order_ts, net_usd, campaign_id, channel, touchpoint_ts, 'linear', 1.0 / n,
        CAST(net_usd / n AS DECIMAL(12, 2))
-FROM j;
+FROM j
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- campaign performance (daily)
+# MAGIC %md
+# MAGIC ### Insert `campaign_performance`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- campaign performance (daily)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.campaign_performance BY NAME
 WITH me AS (
   SELECT campaign_id, channel, to_date(event_ts) AS report_date,
@@ -60,9 +117,17 @@ SELECT u.campaign_id, c.campaign_name, c.segment_id, u.channel, u.report_date, u
        round(coalesce(att.conversions, 0) / nullif(coalesce(u.delivered, u.clicks), 0), 5) AS conversion_rate,
        round(coalesce(att.rev, 0) / nullif(u.spend, 0), 3) AS roas
 FROM u LEFT JOIN ${catalog}.${silver}.campaigns c USING (campaign_id)
-LEFT JOIN att USING (campaign_id, report_date) LEFT JOIN mg USING (campaign_id, report_date);
+LEFT JOIN att USING (campaign_id, report_date) LEFT JOIN mg USING (campaign_id, report_date)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- holdout lift: top batch email campaigns vs. contactable-but-not-sent
+# MAGIC %md
+# MAGIC ### Insert `campaign_holdout_results`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- holdout lift: top batch email campaigns vs. contactable-but-not-sent
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.campaign_holdout_results BY NAME
 WITH top AS (SELECT campaign_id, start_date FROM ${catalog}.${silver}.campaigns
              WHERE channel = 'email' AND campaign_type = 'batch' AND start_date IS NOT NULL),
@@ -88,9 +153,17 @@ SELECT campaign_id, CAST(NULL AS STRING) AS segment_id, 7 AS measurement_window_
        round(try_divide(ct - cc, cc) * 100, 2) AS incremental_lift_pct, CAST((rt - rc) * nt AS DECIMAL(14, 2)) AS incremental_revenue,
        round(2 / (1 + exp(1.702 * abs(coalesce(try_divide(ct - cc, sqrt(((ct * nt + cc * nc) / (nt + nc)) * (1 - (ct * nt + cc * nc) / (nt + nc)) * (1.0 / nt + 1.0 / nc))), 0)))), 6) AS p_value,
        current_timestamp() AS computed_at
-FROM s WHERE nt > 0 AND nc > 0;
+FROM s WHERE nt > 0 AND nc > 0
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- acquisition cohorts
+# MAGIC %md
+# MAGIC ### Insert `cohort_retention`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- acquisition cohorts
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.cohort_retention BY NAME
 WITH f AS (SELECT unified_customer_id, CASE WHEN min_by(channel, order_ts) = 'store' THEN 'store' ELSE 'online' END AS ch,
                   trunc(min(order_date), 'MM') AS cm
@@ -103,9 +176,17 @@ SELECT a.cm AS cohort_month, a.ch AS acquisition_channel, a.k AS months_since_ac
        a.active AS active_customers, round(a.active / sz.n, 4) AS retention_rate,
        CAST(sum(a.rev) OVER (PARTITION BY a.cm, a.ch ORDER BY a.k) AS DECIMAL(14, 2)) AS cumulative_revenue,
        CAST(sum(a.rev) OVER (PARTITION BY a.cm, a.ch ORDER BY a.k) / sz.n AS DECIMAL(12, 2)) AS revenue_per_customer
-FROM a JOIN sz USING (cm, ch);
+FROM a JOIN sz USING (cm, ch)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- channel KPIs (daily)
+# MAGIC %md
+# MAGIC ### Insert `channel_kpis_daily`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- channel KPIs (daily)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.channel_kpis_daily BY NAME
 WITH first_o AS (SELECT unified_customer_id, min(order_date) AS d FROM o_usd WHERE unified_customer_id IS NOT NULL GROUP BY 1),
 od AS (SELECT o.order_date AS report_date, o.channel, count(*) AS orders, count(DISTINCT o.unified_customer_id) AS customers,
@@ -121,9 +202,17 @@ ca AS (SELECT to_date(cart_created_ts) AS report_date, 'web' AS channel, avg(CAS
 SELECT od.report_date, od.channel, ss.sessions, od.orders, od.customers, od.new_customers, CAST(od.revenue AS DECIMAL(14, 2)) AS revenue,
        CAST(od.revenue / od.orders AS DECIMAL(12, 2)) AS aov, round(od.orders / nullif(ss.sessions, 0), 4) AS conversion_rate,
        round(rt.rr, 4) AS return_rate, round(ca.car, 4) AS cart_abandonment_rate
-FROM od LEFT JOIN ss USING (report_date, channel) LEFT JOIN rt USING (report_date, channel) LEFT JOIN ca USING (report_date, channel);
+FROM od LEFT JOIN ss USING (report_date, channel) LEFT JOIN rt USING (report_date, channel) LEFT JOIN ca USING (report_date, channel)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- store KPIs (daily)
+# MAGIC %md
+# MAGIC ### Insert `store_kpis_daily`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- store KPIs (daily)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.store_kpis_daily BY NAME
 WITH st AS (SELECT o.order_date AS report_date, o.store_id, count(*) AS transactions, count(DISTINCT o.unified_customer_id) AS customers,
                    avg(CASE WHEN o.unified_customer_id IS NOT NULL THEN 1.0 ELSE 0 END) AS ident, sum(o.net_usd) AS revenue,
@@ -139,9 +228,17 @@ SELECT st.report_date, st.store_id, s.region, st.transactions, st.customers, rou
        coalesce(rt.n, 0) AS returns, CAST(coalesce(ga.n, 0) AS INT) AS gait_analyses, CAST(coalesce(rc.n, 0) AS INT) AS run_club_checkins,
        coalesce(bp.n, 0) AS bopis_orders
 FROM st JOIN ${catalog}.${silver}.stores s USING (store_id) LEFT JOIN rt USING (report_date, store_id)
-LEFT JOIN ga USING (report_date, store_id) LEFT JOIN rc USING (report_date, store_id) LEFT JOIN bp USING (report_date, store_id);
+LEFT JOIN ga USING (report_date, store_id) LEFT JOIN rc USING (report_date, store_id) LEFT JOIN bp USING (report_date, store_id)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- identity resolution stats
+# MAGIC %md
+# MAGIC ### Insert `identity_resolution_stats`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- identity resolution stats
+# COMMAND ----------
+
+run(r"""
 INSERT INTO ${catalog}.${gold}.identity_resolution_stats BY NAME
 WITH r AS (SELECT DISTINCT source_record_key, source_system, unified_customer_id FROM ${catalog}.${silver}.identity_graph),
 cs AS (SELECT unified_customer_id, count(*) AS n FROM r GROUP BY 1),
@@ -157,4 +254,5 @@ SELECT current_timestamp() AS run_ts,
        (SELECT round(avg(CASE WHEN n > 1 THEN 1.0 ELSE 0 END), 4) FROM cs) AS multi_source_customer_pct,
        (SELECT count(*) FROM ${catalog}.${silver}.identity_match_pairs WHERE match_type = 'deterministic') AS deterministic_matches,
        (SELECT count(*) FROM ${catalog}.${silver}.identity_match_pairs WHERE match_type = 'probabilistic') AS probabilistic_matches,
-       (SELECT map_from_entries(collect_list(struct(source_system, round(m, 4)))) FROM src) AS match_rate_by_source;
+       (SELECT map_from_entries(collect_list(struct(source_system, round(m, 4)))) FROM src) AS match_rate_by_source
+""")

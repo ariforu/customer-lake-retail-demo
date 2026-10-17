@@ -21,28 +21,46 @@ packaged as a Declarative Automation Bundle (DAB) so it can be redeployed to any
 5. Reseller bot clusters on limited drops (shared addresses, 100+ accounts).
 6. Seasonality (Jan / Aug / BF–Dec), ~8% YoY growth, rainy autumn 2025 in the Pacific NW and UK.
 
+## Gold data model
+
+![Gold ER diagram](docs/gold_er.png)
+
+Activation flow (Customer 360 → audiences → destinations → measurement):
+
+![Gold activation flow](docs/gold_data_model.png)
+
+Mermaid sources: `docs/gold_er.mmd`, `docs/gold_data_model.mmd`.
+
 ## Repository layout
+
+Every job task is a **Databricks notebook** (source-format `.py`) with widgets for `catalog`, `bronze`, `silver`,
+`gold`, `truth` (populated from job `base_parameters`, so each notebook can also be opened and run interactively).
+SQL notebooks run one statement per cell through a small `run()` helper that substitutes the schema widgets.
 
 ```
 databricks.yml                         bundle + variables + targets
 resources/
-  strideforge_bronze_setup.job.yml     DDL + synthetic bronze generation + story validation
-  strideforge_medallion.job.yml        bronze -> silver -> gold (14 serverless tasks)
+  strideforge_bronze_setup.job.yml     DDL -> synthetic bronze generation -> story validation
+  strideforge_medallion.job.yml        bronze -> silver -> gold (16 serverless notebook tasks)
 src/
-  run_sql.py                           runs SQL files with ${catalog}/${bronze}/${silver}/${gold} substitution
-  ddl/                                 table contracts (comments, PKs, cdp_activation tags)
-  generator/                           Spark + Faker generator (gen/ package) and job entry points
-  silver/                              00_functions .. 08_customer_enrichment (+ 02_identity_resolution.py)
-  gold/                                01_customer_360 .. 04_measurement (+ 03_audiences.py)
+  ddl/          01_bronze, 02_silver, 03_gold            table contracts (comments, PKs, cdp_activation tags)
+  generator/    generate_bronze, validate_bronze         notebooks; gen/ = generator library (Spark + Faker)
+  silver/       00_functions .. 08_customer_enrichment   incl. 02_identity_resolution, 07b_ai_enrichment
+  gold/         01_customer_360 .. 04_measurement        incl. 03_audiences (segments, triggers, exports)
+docs/           gold data model diagrams
 ```
 
 ## Medallion job DAG
 
 ```
-ensure_tables -> silver_reference -> silver_identity_resolution -+-> silver_commerce -+-> silver_service -> silver_ai_review_enrichment -+
-                                                                 |                    +-> silver_customer_enrichment ---------------------+
-                                                                 +-> silver_behavior --> silver_marketing ---------------------------------+-> gold_customer_360 -+-> gold_predictions_products -> gold_audiences
-                                                                 +-> silver_loyalty_sport -------------------------------------------------+                      +-> gold_measurement
+ensure_tables -> ensure_gold_tables -> silver_functions -> silver_reference -> silver_identity_resolution
+  silver_identity_resolution -> silver_commerce -> silver_service -> silver_ai_review_enrichment
+                             -> silver_commerce -> silver_customer_enrichment
+                             -> silver_behavior -> silver_marketing (also needs commerce)
+                             -> silver_loyalty_sport
+  {customer_enrichment, marketing, loyalty_sport, ai_review_enrichment} -> gold_customer_360
+  gold_customer_360 -> gold_predictions_products -> gold_audiences
+  gold_customer_360 -> gold_measurement
 ```
 
 Identity resolution: deterministic keys (normalized email, E.164 phone, loyalty id, POS card scans, run-app order
@@ -69,5 +87,6 @@ databricks bundle run strideforge_bronze_setup -t prod --profile <other> --var c
 databricks bundle run strideforge_medallion   -t prod --profile <other> --var catalog=<catalog>
 ```
 
-Use `--var scale=0.01` for a quick smoke test (15K customers). All schema names are bundle variables
+Use `--var scale=0.01` for a quick smoke test (15K customers). `src/generator/run.py` runs the same generator locally
+through Databricks Connect (`SF_SCALE=0.01 python run.py`). All schema names are bundle variables
 (`bronze_schema`, `silver_schema`, `gold_schema`, `truth_schema`).

@@ -1,9 +1,43 @@
--- Silver digital behaviour: unified web + app events with identity stitching, sessionized
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 04 - Digital behaviour
+# MAGIC
+# MAGIC Silver digital behaviour: unified web + app events with identity stitching, sessionized
+# MAGIC
+# MAGIC _Generated from `04_behavior.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `idmap`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW idmap AS
 SELECT id_type, id_value, min(unified_customer_id) AS unified_customer_id
-FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value;
+FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `web_app_events`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.web_app_events BY NAME
 WITH w AS (
   SELECT c.event_id, coalesce(m1.unified_customer_id, m2.unified_customer_id) AS unified_customer_id, c.cookie_id AS anonymous_id,
@@ -26,8 +60,15 @@ a AS (
   LEFT JOIN idmap m2 ON m2.id_type = 'device_id' AND m2.id_value = e.device_id)
 SELECT x.*, to_date(x.event_ts) AS event_date, split_part(x.sku, '-', 1) AS style_id, p.category
 FROM (SELECT * FROM w UNION ALL SELECT * FROM a) x
-LEFT JOIN ${catalog}.${silver}.products p ON p.style_id = split_part(x.sku, '-', 1);
+LEFT JOIN ${catalog}.${silver}.products p ON p.style_id = split_part(x.sku, '-', 1)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `sessions`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.sessions BY NAME
 SELECT session_id, max(unified_customer_id) AS unified_customer_id, first(anonymous_id) AS anonymous_id, first(platform) AS platform,
        min(event_ts) AS session_start_ts, max(event_ts) AS session_end_ts,
@@ -37,4 +78,5 @@ SELECT session_id, max(unified_customer_id) AS unified_customer_id, first(anonym
        CAST(count_if(event_type = 'add_to_cart') AS INT) AS add_to_carts, max(event_type = 'purchase') AS converted,
        coalesce(min_by(utm_source, event_ts), 'direct') AS traffic_source, min_by(utm_campaign, event_ts) AS utm_campaign,
        min_by(coalesce(page_type, event_type), event_ts) AS landing_page
-FROM ${catalog}.${silver}.web_app_events GROUP BY session_id;
+FROM ${catalog}.${silver}.web_app_events GROUP BY session_id
+""")

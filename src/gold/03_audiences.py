@@ -1,15 +1,22 @@
-"""Gold audiences: segment definitions (rules as data) -> membership, journey triggers, drop calendar, audience exports."""
-import argparse
-import sys
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Gold 03 - Audiences, triggers & exports
+# MAGIC
+# MAGIC Gold audiences: segment definitions (rules as data) -> membership, journey triggers, drop calendar, audience exports.
+# COMMAND ----------
 
-from pyspark.sql import SparkSession
+for _k, _d in [("catalog", "customer_lake_si"), ("bronze", "retail_bronze"), ("silver", "retail_silver"),
+               ("gold", "retail_gold"), ("truth", "retail_synthetic_truth")]:
+    dbutils.widgets.text(_k, _d)
 
-ap = argparse.ArgumentParser()
-for k, d in [("catalog", "customer_lake_si"), ("bronze", "retail_bronze"), ("silver", "retail_silver"),
-             ("gold", "retail_gold"), ("truth", "retail_synthetic_truth")]:
-    ap.add_argument(f"--{k}", default=d)
-a, _ = ap.parse_known_args(sys.argv[1:])
-spark = SparkSession.builder.getOrCreate()
+
+class _Args:
+    pass
+
+
+a = _Args()
+for _k in ["catalog", "bronze", "silver", "gold", "truth"]:
+    setattr(a, _k, dbutils.widgets.get(_k))
 S, G = f"{a.catalog}.{a.silver}", f"{a.catalog}.{a.gold}"
 sql = spark.sql
 
@@ -23,8 +30,8 @@ SEGMENTS = [
      "dynamic", f"""unified_customer_id IN (SELECT r.unified_customer_id FROM {S}.returns r JOIN {S}.skus k USING (sku)
          JOIN {S}.products p USING (style_id) WHERE p.style_name LIKE 'CloudStride 3%' AND r.return_reason = 'too_small'
          AND r.return_type = 'refund' AND r.return_ts > {ASOF} - INTERVAL 120 DAYS)"""),
-    ("SEG-MARATHON-16WK", "Race in 10-17 weeks", "Registered for a half/full marathon 70-120 days out",
-     "dynamic", f"upcoming_race_distance_km >= 21 AND upcoming_race_date BETWEEN {ASOF} + INTERVAL 70 DAYS AND {ASOF} + INTERVAL 120 DAYS"),
+    ("SEG-MARATHON-16WK", "Goal race in 8-20 weeks", "Registered for a half/full marathon 56-140 days out (training block)",
+     "dynamic", f"upcoming_race_distance_km >= 21 AND upcoming_race_date BETWEEN {ASOF} + INTERVAL 56 DAYS AND {ASOF} + INTERVAL 140 DAYS"),
     ("SEG-HIGH-CLV-AT-RISK", "High value at risk", "Platinum/gold CLV with churn probability above 0.5",
      "ml", "clv_tier IN ('platinum', 'gold') AND churn_probability > 0.5"),
     ("SEG-LAPSED-WINBACK", "Lapsed win-back (discount OK)", "Lapsed >365 days, not a full-price buyer, email-contactable",
@@ -43,9 +50,9 @@ SEGMENTS = [
      "dynamic", f"last_order_date > {ASOF} - INTERVAL 14 DAYS"),
     ("SEG-EMAIL-FATIGUED", "Email fatigued", "Contactable but opened <5% of emails in 90 days",
      "dynamic", "email_contactable AND email_open_rate_90d < 0.05"),
-    ("SEG-TRAIL-RAIN", "Trail + rain this week", "Trail/running affinity and rain forecast in home postal code",
-     "dynamic", f"""coalesce(sport_affinity['Trail Running'], 0) + coalesce(sport_affinity['Running'], 0) >= 0.3 AND postal_code IN
-         (SELECT postal_code FROM {S}.weather_daily WHERE is_forecast AND is_rain_day AND weather_date <= {ASOF} + INTERVAL 7 DAYS)"""),
+    ("SEG-TRAIL-RAIN", "Trail runners + heavy rain in 3 days", "Trail affinity and >=8mm rain forecast in home postal code",
+     "dynamic", f"""coalesce(sport_affinity['Trail Running'], 0) >= 0.2 AND postal_code IN
+         (SELECT postal_code FROM {S}.weather_daily WHERE is_forecast AND precipitation_mm >= 8 AND weather_date <= {ASOF} + INTERVAL 3 DAYS)"""),
 ]
 
 sql(f"""CREATE OR REPLACE TEMP VIEW seg_base AS
@@ -70,6 +77,7 @@ SELECT segment_id, unified_customer_id, current_timestamp() AS entered_at, CAST(
 FROM ({members})""")
 for r in sql(f"SELECT segment_id, count(*) n FROM {G}.segment_membership GROUP BY 1 ORDER BY 1").collect():
     print(f"  {r.segment_id:28s} {r.n:>10,d}", flush=True)
+# COMMAND ----------
 
 # ---------------------------------------------------------------- journey triggers (as of the latest data day)
 sql(f"""INSERT OVERWRITE {G}.trigger_events BY NAME
@@ -100,7 +108,7 @@ t AS (
   SELECT unified_customer_id, 'race_training_start', (SELECT ts FROM asof), map('event', event_name, 'event_date', CAST(event_date AS STRING)),
          NULL, 'TRG-RACE-16WK'
   FROM {S}.event_registrations WHERE unified_customer_id IS NOT NULL AND distance_km >= 21
-    AND event_date BETWEEN (SELECT d FROM asof) + INTERVAL 105 DAYS AND (SELECT d FROM asof) + INTERVAL 118 DAYS
+    AND event_date BETWEEN (SELECT d FROM asof) + INTERVAL 105 DAYS AND (SELECT d FROM asof) + INTERVAL 125 DAYS
   UNION ALL
   SELECT m.unified_customer_id, 'weather_rain', (SELECT ts FROM asof), map('postal_code', p.postal_code), NULL, 'TRG-RAIN-TRAIL'
   FROM {G}.segment_membership m JOIN {G}.customer_profile p USING (unified_customer_id) WHERE m.segment_id = 'SEG-TRAIL-RAIN'
@@ -118,6 +126,7 @@ SELECT concat('TG', upper(substr(sha2(concat_ws('|', unified_customer_id, trigge
        CASE WHEN p.email_contactable OR p.push_contactable OR p.sms_contactable THEN 'new' ELSE 'suppressed' END AS status,
        trigger_ts + INTERVAL 7 DAYS AS expires_at
 FROM t JOIN {G}.customer_profile p USING (unified_customer_id)""")
+# COMMAND ----------
 
 # ---------------------------------------------------------------- drop calendar
 sql(f"""INSERT OVERWRITE {G}.drop_calendar BY NAME
@@ -125,6 +134,7 @@ SELECT d.drop_id, d.style_id, d.drop_name, d.release_ts, d.units_available, 'SEG
        (SELECT count(*) FROM {G}.segment_membership WHERE segment_id = 'SEG-SNEAKERHEADS') AS eligible_customer_count,
        CASE WHEN d.member_early_access THEN d.release_ts - INTERVAL 1 DAY END AS early_access_start_ts, d.is_raffle
 FROM {S}.product_drops d""")
+# COMMAND ----------
 
 # ---------------------------------------------------------------- audience exports (consent-filtered syncs)
 sql(f"""INSERT OVERWRITE {G}.audience_exports BY NAME

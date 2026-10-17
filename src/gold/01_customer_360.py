@@ -1,12 +1,54 @@
--- Gold Customer 360: consent gate, profile, identity map, behavioural traits
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Gold 01 - Customer 360
+# MAGIC
+# MAGIC Gold Customer 360: consent gate, profile, identity map, behavioural traits
+# MAGIC
+# MAGIC _Generated from `01_customer_360.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `asof`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW asof AS
-SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY AS ts FROM ${catalog}.${silver}.orders;
+SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY AS ts FROM ${catalog}.${silver}.orders
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `fx`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW fx AS
-SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate);
+SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- consent (contactability gate)
+# MAGIC %md
+# MAGIC ### Insert `customer_consent`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- consent (contactability gate)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_consent BY NAME
 WITH c AS (
   SELECT unified_customer_id,
@@ -31,9 +73,17 @@ SELECT cu.unified_customer_id,
        CASE WHEN c.jurisdiction IN ('GDPR', 'UK-GDPR') THEN coalesce(c.prof_s = 'opted_in', false) ELSE true END AS personalization_profiling,
        c.jurisdiction, coalesce(c.do_not_sell, false) AS do_not_sell, sup.reason IS NOT NULL AS global_suppression,
        sup.reason AS suppression_reason, current_timestamp() AS updated_at
-FROM ${catalog}.${silver}.customers cu LEFT JOIN c USING (unified_customer_id) LEFT JOIN sup USING (unified_customer_id);
+FROM ${catalog}.${silver}.customers cu LEFT JOIN c USING (unified_customer_id) LEFT JOIN sup USING (unified_customer_id)
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- profile
+# MAGIC %md
+# MAGIC ### Insert `customer_profile`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- profile
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_profile BY NAME
 WITH ids AS (SELECT unified_customer_id, max(id_type = 'app_id') AS has_app, max(id_type = 'fitness_id') AS has_fit
              FROM ${catalog}.${silver}.identity_graph GROUP BY 1),
@@ -59,9 +109,17 @@ LEFT JOIN (SELECT * FROM ${catalog}.${silver}.loyalty_members WHERE unified_cust
 LEFT JOIN ${catalog}.${silver}.customer_fit_profile f ON f.unified_customer_id = c.unified_customer_id
 LEFT JOIN ${catalog}.${gold}.customer_consent k ON k.unified_customer_id = c.unified_customer_id
 LEFT JOIN ids ON ids.unified_customer_id = c.unified_customer_id
-LEFT JOIN city_store cs ON cs.city = a.city AND cs.country = a.country;
+LEFT JOIN city_store cs ON cs.city = a.city AND cs.country = a.country
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- identity map (activation identifiers)
+# MAGIC %md
+# MAGIC ### Insert `customer_identity_map`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- identity map (activation identifiers)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_identity_map BY NAME
 WITH g AS (
   SELECT unified_customer_id, id_type, id_value, source_system, is_primary, last_seen
@@ -77,13 +135,28 @@ SELECT unified_customer_id, 'phone_sha256', sha2(id_value, 256), source_system, 
 FROM g WHERE id_type = 'phone'
 UNION ALL
 SELECT unified_customer_id, 'maid', upper(id_value), source_system, is_primary, last_seen, current_timestamp()
-FROM g WHERE id_type = 'device_id';
+FROM g WHERE id_type = 'device_id'
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- traits
+# MAGIC %md
+# MAGIC ### Create `o`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- traits
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW o AS
 SELECT o.*, CAST((o.subtotal_amount - o.discount_amount) / fx.rate AS DECIMAL(14, 2)) AS net_usd
-FROM ${catalog}.${silver}.orders o JOIN fx USING (currency) WHERE o.unified_customer_id IS NOT NULL;
+FROM ${catalog}.${silver}.orders o JOIN fx USING (currency) WHERE o.unified_customer_id IS NOT NULL
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `t_orders`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW t_orders AS
 SELECT unified_customer_id, min(order_date) AS first_order_date, max(order_date) AS last_order_date,
        count(*) AS n_life, count_if(order_date > (SELECT d FROM asof) - INTERVAL 365 DAYS) AS n_12m,
@@ -91,8 +164,15 @@ SELECT unified_customer_id, min(order_date) AS first_order_date, max(order_date)
        avg(CASE WHEN is_full_price THEN 1.0 ELSE 0 END) AS full_price_ratio, mode(channel) AS preferred_channel,
        mode(CASE WHEN channel = 'store' THEN store_id END) AS preferred_store_id,
        count(DISTINCT CASE WHEN channel = 'store' THEN 'store' ELSE 'online' END) > 1 AS is_omnichannel
-FROM o GROUP BY 1;
+FROM o GROUP BY 1
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `t_lines`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW t_lines AS
 WITH l AS (SELECT l.*, p.sport, p.gender AS pgender, p.is_limited_drop, ol.currency
            FROM ${catalog}.${silver}.order_lines l JOIN ${catalog}.${silver}.products p ON p.style_id = l.style_id
@@ -114,8 +194,15 @@ LEFT JOIN (SELECT unified_customer_id, max_by(category, q) AS top_category,
            FROM (SELECT *, sum(q) OVER (PARTITION BY unified_customer_id) AS tot FROM cat) GROUP BY 1) c USING (unified_customer_id)
 LEFT JOIN (SELECT unified_customer_id, max_by(sport, q) AS top_sport,
                   map_from_entries(collect_list(struct(sport, round(q / tot, 3)))) AS sport_affinity
-           FROM (SELECT *, sum(q) OVER (PARTITION BY unified_customer_id) AS tot FROM sp) GROUP BY 1) s USING (unified_customer_id);
+           FROM (SELECT *, sum(q) OVER (PARTITION BY unified_customer_id) AS tot FROM sp) GROUP BY 1) s USING (unified_customer_id)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `customer_traits`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_traits BY NAME
 WITH dig AS (SELECT unified_customer_id, count(*) AS sessions_30d, sum(product_views) AS pv_30d FROM ${catalog}.${silver}.sessions
              WHERE unified_customer_id IS NOT NULL AND session_start_ts > (SELECT ts FROM asof) - INTERVAL 30 DAYS GROUP BY 1),
@@ -128,7 +215,9 @@ run AS (SELECT unified_customer_id, sum(CASE WHEN start_ts > (SELECT ts FROM aso
                sum(CASE WHEN start_ts > (SELECT ts FROM asof) - INTERVAL 90 DAYS THEN distance_miles END) AS m90
         FROM ${catalog}.${silver}.fitness_activities WHERE unified_customer_id IS NOT NULL
           AND start_ts > (SELECT ts FROM asof) - INTERVAL 90 DAYS GROUP BY 1),
-race AS (SELECT unified_customer_id, min_by(event_date, event_date) AS race_date, min_by(distance_km, event_date) AS race_km
+race AS (SELECT unified_customer_id,  -- next goal race: prefer half/full marathons over short races
+                 min_by(event_date, struct(distance_km < 21, event_date)) AS race_date,
+                 min_by(distance_km, struct(distance_km < 21, event_date)) AS race_km
          FROM ${catalog}.${silver}.event_registrations WHERE unified_customer_id IS NOT NULL AND event_date > (SELECT d FROM asof) GROUP BY 1),
 club AS (SELECT unified_customer_id, count(*) AS n FROM ${catalog}.${silver}.run_club_attendance
          WHERE unified_customer_id IS NOT NULL AND checkin_ts > (SELECT ts FROM asof) - INTERVAL 90 DAYS GROUP BY 1),
@@ -173,4 +262,5 @@ SELECT sc.unified_customer_id, sc.first_order_date, sc.last_order_date, sc.dsl A
        round(rv.r, 2) AS avg_review_rating, current_timestamp() AS updated_at
 FROM sc LEFT JOIN t_lines tl USING (unified_customer_id) LEFT JOIN dig USING (unified_customer_id) LEFT JOIN em USING (unified_customer_id)
 LEFT JOIN run USING (unified_customer_id) LEFT JOIN race USING (unified_customer_id) LEFT JOIN club USING (unified_customer_id)
-LEFT JOIN nps USING (unified_customer_id) LEFT JOIN tk USING (unified_customer_id) LEFT JOIN rv USING (unified_customer_id);
+LEFT JOIN nps USING (unified_customer_id) LEFT JOIN tk USING (unified_customer_id) LEFT JOIN rv USING (unified_customer_id)
+""")

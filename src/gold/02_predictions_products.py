@@ -1,9 +1,44 @@
--- Gold: product feed, propensity scores (transparent heuristic_v1 baseline), recommendations, basket affinity, snapshots
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Gold 02 - Predictions & products
+# MAGIC
+# MAGIC Gold: product feed, propensity scores (transparent heuristic_v1 baseline), recommendations, basket affinity, snapshots
+# MAGIC
+# MAGIC _Generated from `02_predictions_products.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `asof`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW asof AS
-SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY AS ts FROM ${catalog}.${silver}.orders;
+SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY AS ts FROM ${catalog}.${silver}.orders
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- product catalog feed
+# MAGIC %md
+# MAGIC ### Insert `product_catalog_enriched`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- product catalog feed
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.product_catalog_enriched BY NAME
 WITH inv_dc AS (SELECT sku, sum(available_qty) AS q FROM ${catalog}.${silver}.inventory_daily
                 WHERE location_type = 'dc' AND snapshot_date = (SELECT max(snapshot_date) FROM ${catalog}.${silver}.inventory_daily WHERE location_type = 'dc')
@@ -24,9 +59,17 @@ SELECT k.sku, p.style_id, p.style_name, p.category, p.sport, p.gender, k.colorwa
        current_timestamp() AS updated_at
 FROM ${catalog}.${silver}.skus k JOIN ${catalog}.${silver}.products p USING (style_id)
 LEFT JOIN inv_dc USING (sku) LEFT JOIN inv_st USING (sku) LEFT JOIN px USING (sku) LEFT JOIN rv ON rv.style_id = p.style_id
-WHERE p.lifecycle_status <> 'discontinued';
+WHERE p.lifecycle_status <> 'discontinued'
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- predictions (heuristic baseline; swap for MLflow models later)
+# MAGIC %md
+# MAGIC ### Insert `customer_predictions`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- predictions (heuristic baseline; swap for MLflow models later)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_predictions BY NAME
 WITH t AS (SELECT * FROM ${catalog}.${gold}.customer_traits),
 shoe AS (SELECT unified_customer_id, max_by(total_miles, registered_at) AS miles, max_by(avg_weekly_miles, registered_at) AS wk
@@ -72,9 +115,17 @@ SELECT unified_customer_id,
        round(least(1.0, 0.03 + coalesce(category_affinity['Basketball'], 0) * 2), 3) AS propensity_basketball,
        round(least(1.0, coalesce(category_affinity['Kids Footwear'], 0) * 3 + coalesce(category_affinity['Kids Apparel'], 0) * 3), 3) AS propensity_kids,
        'heuristic_v1' AS model_version, current_timestamp() AS scored_at
-FROM s;
+FROM s
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- recommendations (size- and inventory-aware)
+# MAGIC %md
+# MAGIC ### Insert `customer_product_recommendations`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- recommendations (size- and inventory-aware)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_product_recommendations BY NAME
 WITH pop AS (
   SELECT l.style_id, p.category, p.gender, sum(l.quantity) AS units,
@@ -111,14 +162,29 @@ SELECT unified_customer_id, CAST(row_number() OVER (PARTITION BY unified_custome
        concat('Top seller in ', category, ' in your size') AS reason, 'popularity_affinity_v1' AS model_version,
        current_timestamp() AS generated_at
 FROM scored
-QUALIFY row_number() OVER (PARTITION BY unified_customer_id ORDER BY score DESC, style_id) <= 5;
+QUALIFY row_number() OVER (PARTITION BY unified_customer_id ORDER BY score DESC, style_id) <= 5
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Merge `customer_predictions`
+# COMMAND ----------
+
+run(r"""
 MERGE INTO ${catalog}.${gold}.customer_predictions t
 USING (SELECT unified_customer_id, style_id FROM ${catalog}.${gold}.customer_product_recommendations WHERE rank = 1) s
 ON t.unified_customer_id = s.unified_customer_id
-WHEN MATCHED THEN UPDATE SET t.next_best_style_id = s.style_id;
+WHEN MATCHED THEN UPDATE SET t.next_best_style_id = s.style_id
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- basket affinity (style level)
+# MAGIC %md
+# MAGIC ### Insert `product_affinity`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- basket affinity (style level)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.product_affinity BY NAME
 WITH b AS (SELECT DISTINCT order_id, style_id, category FROM ${catalog}.${silver}.order_lines),
 multi AS (SELECT order_id FROM b GROUP BY 1 HAVING count(*) > 1),
@@ -130,9 +196,17 @@ pr AS (SELECT x.style_id AS a, y.style_id AS c, first(x.category) AS ac, first(y
 SELECT pr.a AS antecedent_style_id, pr.c AS consequent_style_id, pr.ac AS antecedent_category, pr.cc AS consequent_category,
        round(pr.n / tot.n, 6) AS support, round(pr.n / sa.n, 4) AS confidence,
        round((pr.n / sa.n) / (sc.n / tot.n), 3) AS lift, current_timestamp() AS computed_at
-FROM pr CROSS JOIN tot JOIN s sa ON sa.style_id = pr.a JOIN s sc ON sc.style_id = pr.c;
+FROM pr CROSS JOIN tot JOIN s sa ON sa.style_id = pr.a JOIN s sc ON sc.style_id = pr.c
+""")
+# COMMAND ----------
 
--- ---------------------------------------------------------------- month-end customer snapshots (last 6 months)
+# MAGIC %md
+# MAGIC ### Insert `customer_daily_snapshot`
+# MAGIC
+# MAGIC ---------------------------------------------------------------- month-end customer snapshots (last 6 months)
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${gold}.customer_daily_snapshot BY NAME
 WITH m AS (SELECT explode(sequence(1, 6)) AS k),
 sd AS (SELECT last_day(add_months((SELECT d FROM asof), -k)) AS snapshot_date FROM m),
@@ -152,4 +226,5 @@ SELECT a.snapshot_date, a.unified_customer_id,
        round(1 / (1 + exp(-(-2.0 + 0.0065 * datediff(a.snapshot_date, a.last_o) - 0.35 * ln(1 + a.n12)))), 4) AS churn_probability,
        CAST(a.rev12 * (1 - 1 / (1 + exp(-(-2.0 + 0.0065 * datediff(a.snapshot_date, a.last_o) - 0.35 * ln(1 + a.n12))))) * 1.08 AS DECIMAL(14, 2)) AS predicted_clv_12m,
        cp.email_contactable
-FROM agg a LEFT JOIN ${catalog}.${gold}.customer_profile cp USING (unified_customer_id);
+FROM agg a LEFT JOIN ${catalog}.${gold}.customer_profile cp USING (unified_customer_id)
+""")

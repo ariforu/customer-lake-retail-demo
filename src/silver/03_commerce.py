@@ -1,12 +1,53 @@
--- Silver commerce: unified orders / lines / returns / carts across e-commerce + POS, identity-stitched
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # Silver 03 - Commerce
+# MAGIC
+# MAGIC Silver commerce: unified orders / lines / returns / carts across e-commerce + POS, identity-stitched
+# MAGIC
+# MAGIC _Generated from `03_commerce.sql`; parameters come from widgets / job base_parameters._
+# COMMAND ----------
 
+for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
+    dbutils.widgets.text(_k, _d)
+P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
+
+
+def run(sql):
+    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
+    for k, v in P.items():
+        sql = sql.replace("${" + k + "}", v)
+    return spark.sql(sql)
+
+
+print(P)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create `idmap`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW idmap AS
 SELECT id_type, id_value, min(unified_customer_id) AS unified_customer_id
-FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value;
+FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Create `fx`
+# COMMAND ----------
+
+run(r"""
 CREATE OR REPLACE TEMP VIEW fx AS
-SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate);
+SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `orders`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.orders BY NAME
 WITH el AS (SELECT order_id, sum(quantity) AS items, max(is_markdown) AS any_md FROM ${catalog}.${bronze}.ecom_order_lines_raw GROUP BY 1),
 pl AS (SELECT transaction_id, sum(quantity) AS items, max(is_markdown) AS any_md FROM ${catalog}.${bronze}.pos_transaction_lines_raw GROUP BY 1),
@@ -34,8 +75,15 @@ p AS (
   FROM ${catalog}.${bronze}.pos_transactions_raw t JOIN pl USING (transaction_id)
   LEFT JOIN idmap m1 ON m1.id_type = 'pos_id' AND m1.id_value = t.pos_customer_id
   LEFT JOIN idmap m2 ON m2.id_type = 'loyalty_card' AND m2.id_value = t.loyalty_card_number)
-SELECT *, to_date(order_ts) AS order_date FROM (SELECT * FROM e UNION ALL SELECT * FROM p);
+SELECT *, to_date(order_ts) AS order_date FROM (SELECT * FROM e UNION ALL SELECT * FROM p)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `order_lines`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.order_lines BY NAME
 WITH l AS (
   SELECT order_id, line_number, sku, quantity, unit_price, discount_amount, line_total, is_markdown FROM ${catalog}.${bronze}.ecom_order_lines_raw
@@ -47,8 +95,15 @@ SELECT l.order_id, l.line_number, o.unified_customer_id, l.sku, k.style_id, p.ca
 FROM l JOIN ${catalog}.${silver}.orders o USING (order_id)
 LEFT JOIN ${catalog}.${silver}.skus k USING (sku)
 LEFT JOIN ${catalog}.${silver}.products p ON p.style_id = k.style_id
-LEFT JOIN fx ON fx.currency = o.currency;
+LEFT JOIN fx ON fx.currency = o.currency
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `returns`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.returns BY NAME
 WITH r AS (
   SELECT return_id, order_id, line_number, sku, quantity, refund_amount, lower(return_reason_code) AS return_reason,
@@ -63,8 +118,15 @@ WITH r AS (
   LEFT JOIN ${catalog}.${bronze}.pos_transaction_lines_raw l ON l.transaction_id = r.original_transaction_id AND l.sku = r.sku
   QUALIFY row_number() OVER (PARTITION BY r.return_id ORDER BY l.line_number) = 1)
 SELECT r.*, o.unified_customer_id, r.return_reason IN ('too_small', 'too_big') AS is_fit_related
-FROM r JOIN ${catalog}.${silver}.orders o USING (order_id);
+FROM r JOIN ${catalog}.${silver}.orders o USING (order_id)
+""")
+# COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Insert `carts`
+# COMMAND ----------
+
+run(r"""
 INSERT OVERWRITE ${catalog}.${silver}.carts BY NAME
 WITH c AS (
   SELECT cart_id, first(session_id) AS session_id, max(ecom_customer_id) AS ecom_customer_id, first(cookie_id) AS anon_id,
@@ -83,4 +145,5 @@ FROM c
 LEFT JOIN (SELECT session_id, min(order_id) AS order_id FROM ${catalog}.${bronze}.ecom_orders_raw GROUP BY 1) o USING (session_id)
 LEFT JOIN idmap m1 ON m1.id_type = 'ecom_id' AND m1.id_value = c.ecom_customer_id
 LEFT JOIN idmap m2 ON m2.id_type = 'cookie_id' AND m2.id_value = c.anon_id
-LEFT JOIN idmap m3 ON m3.id_type = 'device_id' AND m3.id_value = c.anon_id;
+LEFT JOIN idmap m3 ON m3.id_type = 'device_id' AND m3.id_value = c.anon_id
+""")
