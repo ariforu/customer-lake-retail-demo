@@ -78,6 +78,8 @@ UNION ALL
 SELECT e.engagement_id, e.send_id, e.campaign_id, s.unified_customer_id, e.channel, e.event_type, CAST(e.event_ts AS TIMESTAMP),
        s.variant, e.link_url, e.device_type
 FROM ${catalog}.${bronze}.esp_engagement_raw e LEFT JOIN s USING (send_id)
+-- ESP occasionally emits the same engagement twice (same send, type and second): keep one
+QUALIFY row_number() OVER (PARTITION BY e.engagement_id ORDER BY e._ingested_at) = 1
 """)
 # COMMAND ----------
 

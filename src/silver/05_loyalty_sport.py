@@ -101,6 +101,8 @@ SELECT e.registration_id, m.unified_customer_id, e.event_id, e.event_name, e.eve
        e.event_city, e.distance_km, CAST(e.registered_ts AS TIMESTAMP) AS registered_at, e.registration_source
 FROM ${catalog}.${bronze}.event_registrations_raw e
 LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.norm_email(e.email)
+-- partners resend re-registrations for the same person + race: keep the first registration
+QUALIFY row_number() OVER (PARTITION BY e.registration_id ORDER BY CAST(e.registered_ts AS TIMESTAMP)) = 1
 """)
 # COMMAND ----------
 

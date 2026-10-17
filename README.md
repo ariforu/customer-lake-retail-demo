@@ -31,6 +31,21 @@ Activation flow (Customer 360 → audiences → destinations → measurement):
 
 Mermaid sources: `docs/gold_er.mmd`, `docs/gold_data_model.mmd`.
 
+## Customer Lake
+
+`gold_customer_lake` (notebook `src/gold/05_customer_lake.py`) publishes the objects that Customer Lake entities point at:
+`household_profile` (Household entity profile) and nine customer **event tables** (`purchase_events`, `return_events`,
+`digital_events`, `message_engagement_events`, `run_activity_events`, `loyalty_events`, `race_registration_events`,
+`support_events`, `review_events`), each validated for a unique event ID and a `TIMESTAMP` column.
+
+| Customer Lake entity | Profile table (PK) | Related tables |
+|---|---|---|
+| Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_predictions`; 1:many `customer_product_recommendations`, `customer_identity_map`; 9 event tables |
+| Household | `household_profile` (`household_id`) | 1:many `customer_profile` |
+
+Step-by-step wizard settings, recommended attributes and the segments rebuilt as Customer Lake audiences:
+[docs/customer_lake_setup.md](docs/customer_lake_setup.md).
+
 ## Repository layout
 
 Every job task is a **Databricks notebook** (source-format `.py`) with widgets for `catalog`, `bronze`, `silver`,
@@ -42,13 +57,13 @@ statement per cell through `run()`, which substitutes the schema names.
 databricks.yml                         bundle + variables + targets
 resources/
   strideforge_bronze_setup.job.yml     DDL -> synthetic bronze generation -> story validation
-  strideforge_medallion.job.yml        bronze -> silver -> gold (16 serverless notebook tasks)
+  strideforge_medallion.job.yml        bronze -> silver -> gold (17 serverless notebook tasks)
 src/
   ddl/          01_bronze, 02_silver, 03_gold            table contracts (comments, PKs, cdp_activation tags)
   generator/    generate_bronze, validate_bronze         notebooks; gen/ = generator library (Spark + Faker)
   silver/       00_functions .. 08_customer_enrichment   incl. 02_identity_resolution, 07b_ai_enrichment
-  gold/         01_customer_360 .. 04_measurement        incl. 03_audiences (segments, triggers, exports)
-docs/           gold data model diagrams
+  gold/         01_customer_360 .. 05_customer_lake      incl. 03_audiences, 05_customer_lake (Customer Lake objects)
+docs/           gold data model diagrams, Customer Lake setup guide
 ```
 
 ## Medallion job DAG
@@ -60,7 +75,7 @@ ensure_tables -> silver_functions -> silver_reference -> silver_identity_resolut
                              -> silver_behavior -> silver_marketing (also needs commerce)
                              -> silver_loyalty_sport
   {ensure_gold_tables, customer_enrichment, marketing, loyalty_sport, ai_review_enrichment} -> gold_customer_360
-  gold_customer_360 -> gold_predictions_products -> gold_audiences
+  gold_customer_360 -> gold_predictions_products -> gold_audiences, gold_customer_lake
   gold_customer_360 -> gold_measurement
 ```
 

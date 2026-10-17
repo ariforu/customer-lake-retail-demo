@@ -114,3 +114,9 @@ resources:
           notebook_task:
             notebook_path: ../src/gold/04_measurement.py
             base_parameters: *params
+
+        - task_key: gold_customer_lake
+          depends_on: [{task_key: gold_predictions_products}]
+          notebook_task:
+            notebook_path: ../src/gold/05_customer_lake.py
+            base_parameters: *params
