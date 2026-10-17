@@ -5,18 +5,10 @@
 # MAGIC Gold audiences: segment definitions (rules as data) -> membership, journey triggers, drop calendar, audience exports.
 # COMMAND ----------
 
-for _k, _d in [("catalog", "customer_lake_si"), ("bronze", "retail_bronze"), ("silver", "retail_silver"),
-               ("gold", "retail_gold"), ("truth", "retail_synthetic_truth")]:
-    dbutils.widgets.text(_k, _d)
+# MAGIC %run ../_params
 
+# COMMAND ----------
 
-class _Args:
-    pass
-
-
-a = _Args()
-for _k in ["catalog", "bronze", "silver", "gold", "truth"]:
-    setattr(a, _k, dbutils.widgets.get(_k))
 S, G = f"{a.catalog}.{a.silver}", f"{a.catalog}.{a.gold}"
 sql = spark.sql
 
@@ -30,8 +22,8 @@ SEGMENTS = [
      "dynamic", f"""unified_customer_id IN (SELECT r.unified_customer_id FROM {S}.returns r JOIN {S}.skus k USING (sku)
          JOIN {S}.products p USING (style_id) WHERE p.style_name LIKE 'CloudStride 3%' AND r.return_reason = 'too_small'
          AND r.return_type = 'refund' AND r.return_ts > {ASOF} - INTERVAL 120 DAYS)"""),
-    ("SEG-MARATHON-16WK", "Goal race in 8-20 weeks", "Registered for a half/full marathon 56-140 days out (training block)",
-     "dynamic", f"upcoming_race_distance_km >= 21 AND upcoming_race_date BETWEEN {ASOF} + INTERVAL 56 DAYS AND {ASOF} + INTERVAL 140 DAYS"),
+    ("SEG-GOAL-RACE-8-20WK", "Goal race in 8-20 weeks", "Next half/full marathon is 56-140 days out (training block)",
+     "dynamic", f"goal_race_date BETWEEN {ASOF} + INTERVAL 56 DAYS AND {ASOF} + INTERVAL 140 DAYS"),
     ("SEG-HIGH-CLV-AT-RISK", "High value at risk", "Platinum/gold CLV with churn probability above 0.5",
      "ml", "clv_tier IN ('platinum', 'gold') AND churn_probability > 0.5"),
     ("SEG-LAPSED-WINBACK", "Lapsed win-back (discount OK)", "Lapsed >365 days, not a full-price buyer, email-contactable",
@@ -52,7 +44,8 @@ SEGMENTS = [
      "dynamic", "email_contactable AND email_open_rate_90d < 0.05"),
     ("SEG-TRAIL-RAIN", "Trail runners + heavy rain in 3 days", "Trail affinity and >=8mm rain forecast in home postal code",
      "dynamic", f"""coalesce(sport_affinity['Trail Running'], 0) >= 0.2 AND postal_code IN
-         (SELECT postal_code FROM {S}.weather_daily WHERE is_forecast AND precipitation_mm >= 8 AND weather_date <= {ASOF} + INTERVAL 3 DAYS)"""),
+         (SELECT postal_code FROM {S}.weather_daily WHERE is_forecast AND precipitation_mm >= 8
+          AND weather_date > {ASOF} AND weather_date <= {ASOF} + INTERVAL 3 DAYS)"""),
 ]
 
 sql(f"""CREATE OR REPLACE TEMP VIEW seg_base AS
@@ -105,10 +98,11 @@ t AS (
   FROM {S}.shoe_mileage WHERE is_active AND total_miles >= 400 AND unified_customer_id IS NOT NULL
     AND last_activity_at > (SELECT ts FROM asof) - INTERVAL 14 DAYS
   UNION ALL
-  SELECT unified_customer_id, 'race_training_start', (SELECT ts FROM asof), map('event', event_name, 'event_date', CAST(event_date AS STRING)),
+  SELECT unified_customer_id, 'race_training_start', (SELECT ts FROM asof),
+         map('goal_race_date', CAST(goal_race_date AS STRING), 'distance_km', CAST(goal_race_distance_km AS STRING)),
          NULL, 'TRG-RACE-16WK'
-  FROM {S}.event_registrations WHERE unified_customer_id IS NOT NULL AND distance_km >= 21
-    AND event_date BETWEEN (SELECT d FROM asof) + INTERVAL 105 DAYS AND (SELECT d FROM asof) + INTERVAL 125 DAYS
+  FROM seg_base   -- 16-week training block starts: same goal-race definition as SEG-GOAL-RACE-8-20WK
+  WHERE goal_race_date BETWEEN (SELECT d FROM asof) + INTERVAL 105 DAYS AND (SELECT d FROM asof) + INTERVAL 125 DAYS
   UNION ALL
   SELECT m.unified_customer_id, 'weather_rain', (SELECT ts FROM asof), map('postal_code', p.postal_code), NULL, 'TRG-RAIN-TRAIL'
   FROM {G}.segment_membership m JOIN {G}.customer_profile p USING (unified_customer_id) WHERE m.segment_id = 'SEG-TRAIL-RAIN'

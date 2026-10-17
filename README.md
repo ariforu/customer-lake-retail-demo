@@ -35,7 +35,8 @@ Mermaid sources: `docs/gold_er.mmd`, `docs/gold_data_model.mmd`.
 
 Every job task is a **Databricks notebook** (source-format `.py`) with widgets for `catalog`, `bronze`, `silver`,
 `gold`, `truth` (populated from job `base_parameters`, so each notebook can also be opened and run interactively).
-SQL notebooks run one statement per cell through a small `run()` helper that substitutes the schema widgets.
+Shared widgets and the `run()` helper live in `src/_params.py` (included with `%run ../_params`); SQL notebooks run one
+statement per cell through `run()`, which substitutes the schema names.
 
 ```
 databricks.yml                         bundle + variables + targets
@@ -53,12 +54,12 @@ docs/           gold data model diagrams
 ## Medallion job DAG
 
 ```
-ensure_tables -> ensure_gold_tables -> silver_functions -> silver_reference -> silver_identity_resolution
+ensure_tables -> silver_functions -> silver_reference -> silver_identity_resolution      (ensure_gold_tables runs in parallel)
   silver_identity_resolution -> silver_commerce -> silver_service -> silver_ai_review_enrichment
                              -> silver_commerce -> silver_customer_enrichment
                              -> silver_behavior -> silver_marketing (also needs commerce)
                              -> silver_loyalty_sport
-  {customer_enrichment, marketing, loyalty_sport, ai_review_enrichment} -> gold_customer_360
+  {ensure_gold_tables, customer_enrichment, marketing, loyalty_sport, ai_review_enrichment} -> gold_customer_360
   gold_customer_360 -> gold_predictions_products -> gold_audiences
   gold_customer_360 -> gold_measurement
 ```

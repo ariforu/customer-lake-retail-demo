@@ -7,19 +7,7 @@
 # MAGIC _Generated from `01_customer_360.sql`; parameters come from widgets / job base_parameters._
 # COMMAND ----------
 
-for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
-    dbutils.widgets.text(_k, _d)
-P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
-
-
-def run(sql):
-    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
-    for k, v in P.items():
-        sql = sql.replace("${" + k + "}", v)
-    return spark.sql(sql)
-
-
-print(P)
+# MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
@@ -215,9 +203,11 @@ run AS (SELECT unified_customer_id, sum(CASE WHEN start_ts > (SELECT ts FROM aso
                sum(CASE WHEN start_ts > (SELECT ts FROM asof) - INTERVAL 90 DAYS THEN distance_miles END) AS m90
         FROM ${catalog}.${silver}.fitness_activities WHERE unified_customer_id IS NOT NULL
           AND start_ts > (SELECT ts FROM asof) - INTERVAL 90 DAYS GROUP BY 1),
-race AS (SELECT unified_customer_id,  -- next goal race: prefer half/full marathons over short races
-                 min_by(event_date, struct(distance_km < 21, event_date)) AS race_date,
-                 min_by(distance_km, struct(distance_km < 21, event_date)) AS race_km
+race AS (SELECT unified_customer_id,
+                 min_by(event_date, event_date) AS race_date, min_by(distance_km, event_date) AS race_km,
+                 min(CASE WHEN coalesce(distance_km, 0) >= 21 THEN event_date END) AS goal_date,
+                 min_by(CASE WHEN coalesce(distance_km, 0) >= 21 THEN distance_km END,
+                        CASE WHEN coalesce(distance_km, 0) >= 21 THEN event_date END) AS goal_km
          FROM ${catalog}.${silver}.event_registrations WHERE unified_customer_id IS NOT NULL AND event_date > (SELECT d FROM asof) GROUP BY 1),
 club AS (SELECT unified_customer_id, count(*) AS n FROM ${catalog}.${silver}.run_club_attendance
          WHERE unified_customer_id IS NOT NULL AND checkin_ts > (SELECT ts FROM asof) - INTERVAL 90 DAYS GROUP BY 1),
@@ -257,6 +247,7 @@ SELECT sc.unified_customer_id, sc.first_order_date, sc.last_order_date, sc.dsl A
        round(em.opens / nullif(em.sends, 0), 3) AS email_open_rate_90d, round(em.clicks / nullif(em.sends, 0), 3) AS email_click_rate_90d,
        round(coalesce(run.m30, 0), 1) AS run_miles_30d, round(coalesce(run.m90, 0), 1) AS run_miles_90d,
        race.race_date AS upcoming_race_date, race.race_km AS upcoming_race_distance_km,
+       race.goal_date AS goal_race_date, race.goal_km AS goal_race_distance_km,
        CAST(coalesce(club.n, 0) AS INT) AS run_club_checkins_90d, nps.nps AS nps_latest,
        CAST(coalesce(tk.open_t, 0) AS INT) AS open_service_tickets, CAST(coalesce(rv.n, 0) AS INT) AS review_count,
        round(rv.r, 2) AS avg_review_rating, current_timestamp() AS updated_at

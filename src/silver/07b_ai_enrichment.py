@@ -9,19 +9,7 @@
 # MAGIC _Generated from `07b_ai_enrichment.sql`; parameters come from widgets / job base_parameters._
 # COMMAND ----------
 
-for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
-    dbutils.widgets.text(_k, _d)
-P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
-
-
-def run(sql):
-    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
-    for k, v in P.items():
-        sql = sql.replace("${" + k + "}", v)
-    return spark.sql(sql)
-
-
-print(P)
+# MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md

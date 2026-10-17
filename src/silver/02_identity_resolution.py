@@ -9,20 +9,12 @@
 # MAGIC   probabilistic: canonical first name + last name + postal code, canonical first name + last name + birth date
 # COMMAND ----------
 
+# MAGIC %run ../_params
+
+# COMMAND ----------
+
 from pyspark.sql import functions as F
 
-for _k, _d in [("catalog", "customer_lake_si"), ("bronze", "retail_bronze"), ("silver", "retail_silver"),
-               ("gold", "retail_gold"), ("truth", "retail_synthetic_truth")]:
-    dbutils.widgets.text(_k, _d)
-
-
-class _Args:
-    pass
-
-
-a = _Args()
-for _k in ["catalog", "bronze", "silver", "gold", "truth"]:
-    setattr(a, _k, dbutils.widgets.get(_k))
 B, S, T = f"{a.catalog}.{a.bronze}", f"{a.catalog}.{a.silver}", f"{a.catalog}.{a.truth}"
 fn = lambda name: f"{S}.{name}"
 

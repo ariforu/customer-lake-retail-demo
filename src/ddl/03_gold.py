@@ -8,19 +8,7 @@
 # MAGIC _Generated from `03_gold.sql`; parameters come from widgets / job base_parameters._
 # COMMAND ----------
 
-for _k, _d in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]:
-    dbutils.widgets.text(_k, _d)
-P = {k: dbutils.widgets.get(k) for k, _ in [('catalog', 'customer_lake_si'), ('bronze', 'retail_bronze'), ('silver', 'retail_silver'), ('gold', 'retail_gold'), ('truth', 'retail_synthetic_truth')]}
-
-
-def run(sql):
-    """Substitute ${catalog} / ${bronze} / ${silver} / ${gold} / ${truth} and execute one statement."""
-    for k, v in P.items():
-        sql = sql.replace("${" + k + "}", v)
-    return spark.sql(sql)
-
-
-print(P)
+# MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
@@ -110,7 +98,9 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_traits (
   limited_drop_purchases INT, sessions_30d INT, product_views_30d INT,
   email_open_rate_90d DOUBLE, email_click_rate_90d DOUBLE,
   run_miles_30d DOUBLE, run_miles_90d DOUBLE, upcoming_race_date DATE,
-  upcoming_race_distance_km DOUBLE, run_club_checkins_90d INT,
+  upcoming_race_distance_km DOUBLE,
+  goal_race_date DATE COMMENT 'next half/full marathon (training goal)', goal_race_distance_km DOUBLE,
+  run_club_checkins_90d INT,
   nps_latest INT, open_service_tickets INT, review_count INT, avg_review_rating DOUBLE,
   updated_at TIMESTAMP,
   CONSTRAINT pk_customer_traits PRIMARY KEY (unified_customer_id)
@@ -373,3 +363,15 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.identity_resolution_stats (
   match_rate_by_source MAP<STRING, DOUBLE>
 ) COMMENT 'Identity resolution run statistics'
 """)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Migrate `customer_traits` (add goal-race columns to tables created by earlier versions)
+# COMMAND ----------
+
+_t = f"{P['catalog']}.{P['gold']}.customer_traits"
+_cols = {f.name for f in spark.table(_t).schema}
+if "goal_race_date" not in _cols:
+    spark.sql(f"ALTER TABLE {_t} ADD COLUMNS (goal_race_date DATE COMMENT 'next half/full marathon (training goal)', "
+              "goal_race_distance_km DOUBLE)")
+    print("added goal_race_* columns")

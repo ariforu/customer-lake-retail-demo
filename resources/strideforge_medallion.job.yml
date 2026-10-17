@@ -25,13 +25,12 @@ resources:
               truth: ${var.truth_schema}
 
         - task_key: ensure_gold_tables
-          depends_on: [{task_key: ensure_tables}]
           notebook_task:
             notebook_path: ../src/ddl/03_gold.py
             base_parameters: *params
 
         - task_key: silver_functions
-          depends_on: [{task_key: ensure_gold_tables}]
+          depends_on: [{task_key: ensure_tables}]
           notebook_task:
             notebook_path: ../src/silver/00_functions.py
             base_parameters: *params
@@ -92,7 +91,7 @@ resources:
 
         # ---------------- gold
         - task_key: gold_customer_360
-          depends_on: [{task_key: silver_customer_enrichment}, {task_key: silver_marketing},
+          depends_on: [{task_key: ensure_gold_tables}, {task_key: silver_customer_enrichment}, {task_key: silver_marketing},
                        {task_key: silver_loyalty_sport}, {task_key: silver_ai_review_enrichment}]
           notebook_task:
             notebook_path: ../src/gold/01_customer_360.py
