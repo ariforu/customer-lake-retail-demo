@@ -30,7 +30,7 @@
 
 run(r"""
 CREATE OR REPLACE TABLE ${catalog}.${gold}.household_profile
-COMMENT 'Customer Lake: Household entity profile - one row per household_id with member roll-ups'
+COMMENT 'Customer Lake: Household profile - one row per household with member roll-ups (members, kids, contactability, revenue, CLV, churn, top sport, best tier). Joined many:1 from customer_profile on household_id. Derived from gold customer_profile, customer_traits, customer_predictions and silver households. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 TBLPROPERTIES ('cdp_activation' = 'true')
 AS
 WITH m AS (
@@ -70,7 +70,7 @@ ALTER TABLE ${catalog}.${gold}.household_profile ALTER COLUMN household_id SET N
 
 run(r"""
 CREATE OR REPLACE TABLE ${catalog}.${gold}.purchase_events
-COMMENT 'Customer Lake: purchase event table (event id order_id, timestamp order_ts); revenue normalized to USD'
+COMMENT 'Customer Lake event table: identified orders (event id order_id, timestamp order_ts) with USD revenue, channel, promo, UTMs and what was bought (categories, sports, styles, running shoes, CloudStride 3, limited drop). Derived from silver orders + order_lines + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 TBLPROPERTIES ('cdp_activation' = 'true')
 AS
 WITH fx AS (SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate)),
@@ -99,7 +99,7 @@ WHERE o.unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE TABLE ${catalog}.${gold}.return_events
-COMMENT 'Customer Lake: return event table (event id return_id, timestamp return_ts)'
+COMMENT 'Customer Lake event table: identified returns (event id return_id, timestamp return_ts) with style, category, reason and fit flag. Derived from silver returns + skus + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 TBLPROPERTIES ('cdp_activation' = 'true')
 AS
 SELECT r.return_id, r.unified_customer_id, r.return_ts, r.order_id, r.sku, k.style_id, p.style_name, p.category, p.sport,
@@ -117,7 +117,7 @@ WHERE r.unified_customer_id IS NOT NULL AND r.return_ts IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.digital_events
-COMMENT 'Customer Lake: web/app behaviour event table (event id event_id, timestamp event_ts); identified visitors only'
+COMMENT 'Customer Lake event table (view): identified web/app events (event id event_id, timestamp event_ts). View over silver web_app_events where unified_customer_id is known. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT event_id, unified_customer_id, event_ts, platform, event_type, session_id, page_type, sku, style_id, category,
        search_term, selected_size, utm_source, utm_medium, utm_campaign, device_type
@@ -131,7 +131,7 @@ FROM ${catalog}.${silver}.web_app_events WHERE unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.message_engagement_events
-COMMENT 'Customer Lake: owned-channel message event table (event id message_event_id, timestamp event_ts)'
+COMMENT 'Customer Lake event table (view): email/SMS/push sends and engagement (event id message_event_id, timestamp event_ts) with campaign name and objective. View over silver message_events + campaigns. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT m.message_event_id, m.unified_customer_id, m.event_ts, m.channel, m.event_type, m.campaign_id, c.campaign_name,
        c.objective AS campaign_objective, c.campaign_type, m.variant, m.link_url, m.device_type
@@ -147,7 +147,7 @@ WHERE m.unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.run_activity_events
-COMMENT 'Customer Lake: run-app activity event table (event id activity_id, timestamp start_ts)'
+COMMENT 'Customer Lake event table (view): run-app activities (event id activity_id, timestamp start_ts) with shoe and its total mileage. View over silver fitness_activities + shoe_mileage. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT a.activity_id, a.unified_customer_id, a.start_ts, a.activity_type, a.distance_km, a.distance_miles, a.duration_seconds,
        a.avg_pace_sec_per_km, a.elevation_gain_m, a.shoe_registration_id, a.sku, m.total_miles AS shoe_total_miles
@@ -159,7 +159,7 @@ WHERE a.unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.loyalty_events
-COMMENT 'Customer Lake: loyalty points event table (event id ledger_id, timestamp activity_ts)'
+COMMENT 'Customer Lake event table (view): loyalty ledger activity (event id ledger_id, timestamp activity_ts). View over silver loyalty_transactions. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT ledger_id, unified_customer_id, activity_ts, loyalty_id, activity_type, points, reference_id, reference_type
 FROM ${catalog}.${silver}.loyalty_transactions WHERE unified_customer_id IS NOT NULL
@@ -168,7 +168,7 @@ FROM ${catalog}.${silver}.loyalty_transactions WHERE unified_customer_id IS NOT 
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.race_registration_events
-COMMENT 'Customer Lake: race / event registration event table (event id registration_id, timestamp registered_at)'
+COMMENT 'Customer Lake event table (view): race registrations (event id registration_id, timestamp registered_at) with race date, type and distance. View over silver event_registrations. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT registration_id, unified_customer_id, registered_at, event_id, event_name, event_type, event_date, event_city,
        distance_km, registration_source
@@ -178,7 +178,7 @@ FROM ${catalog}.${silver}.event_registrations WHERE unified_customer_id IS NOT N
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.support_events
-COMMENT 'Customer Lake: customer service ticket event table (event id ticket_id, timestamp created_at)'
+COMMENT 'Customer Lake event table (view): service tickets (event id ticket_id, timestamp created_at) with category, status, sentiment. View over silver service_tickets. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT ticket_id, unified_customer_id, created_at, channel, category, priority, status, sentiment, resolution_hours, order_id
 FROM ${catalog}.${silver}.service_tickets WHERE unified_customer_id IS NOT NULL
@@ -187,7 +187,7 @@ FROM ${catalog}.${silver}.service_tickets WHERE unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.review_events
-COMMENT 'Customer Lake: product review event table (event id review_id, timestamp submitted_at)'
+COMMENT 'Customer Lake event table (view): product reviews (event id review_id, timestamp submitted_at) with rating and AI fit/sentiment. View over silver product_reviews + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
 AS
 SELECT r.review_id, r.unified_customer_id, r.submitted_at, r.sku, r.style_id, p.style_name, p.category, r.rating,
        r.fit_rating, r.ai_sentiment, r.ai_fit_feedback, r.ai_themes, r.verified_purchase
