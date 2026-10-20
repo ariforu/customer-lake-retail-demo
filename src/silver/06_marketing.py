@@ -2,16 +2,20 @@
 # MAGIC %md
 # MAGIC # Silver 06 - Marketing
 # MAGIC
-# MAGIC Silver marketing: campaigns, owned-channel message events, paid media, affiliates, touchpoints
+# MAGIC **What it does:** Builds the campaign list and links email/SMS/push messages, paid media, affiliate codes and site visits to customers.
 # MAGIC
-# MAGIC _Generated from `06_marketing.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** bronze ESP, paid media and affiliate tables; silver `orders`, `sessions`, `identity_graph`
+# MAGIC - **Writes:** `campaigns`, `message_events`, `paid_media_performance`, `affiliate_redemptions`, `marketing_touchpoints`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_marketing`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `idmap`
+# MAGIC ### Step 1 - Lookup: identifier -> customer
 # COMMAND ----------
 
 run(r"""
@@ -22,7 +26,7 @@ FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `campaigns`
+# MAGIC ### Step 2 - Campaign list (owned + paid)
 # COMMAND ----------
 
 run(r"""
@@ -59,7 +63,7 @@ FROM paid
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `message_events`
+# MAGIC ### Step 3 - Email/SMS/push sends, opens, clicks (duplicates removed)
 # COMMAND ----------
 
 run(r"""
@@ -84,7 +88,7 @@ QUALIFY row_number() OVER (PARTITION BY e.engagement_id ORDER BY e._ingested_at)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `paid_media_performance`
+# MAGIC ### Step 4 - Daily paid media results
 # COMMAND ----------
 
 run(r"""
@@ -96,7 +100,7 @@ FROM ${catalog}.${bronze}.paid_media_daily_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `affiliate_redemptions`
+# MAGIC ### Step 5 - Affiliate code use
 # COMMAND ----------
 
 run(r"""
@@ -110,7 +114,7 @@ LEFT JOIN ${catalog}.${silver}.orders o USING (order_id)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `marketing_touchpoints`
+# MAGIC ### Step 6 - Every marketing touch per customer (for attribution)
 # COMMAND ----------
 
 run(r"""

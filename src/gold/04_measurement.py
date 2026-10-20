@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Gold 04 - Measurement
+# MAGIC # Gold 04 - Campaign results and KPIs
 # MAGIC
-# MAGIC Gold measurement: attribution, campaign performance, holdout lift, cohorts, channel/store KPIs, identity stats
+# MAGIC **What it does:** Credits orders to campaigns, measures each campaign, compares sent vs not-sent customers, and builds cohort, channel, store and identity-resolution metrics.
 # MAGIC
-# MAGIC _Generated from `04_measurement.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** silver orders, touchpoints, messages, paid media, sessions, carts, returns; gold customer profile
+# MAGIC - **Writes:** `campaign_attribution`, `campaign_performance`, `campaign_holdout_results`, `cohort_retention`, `channel_kpis_daily`, `store_kpis_daily`, `identity_resolution_stats`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_measurement`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `asof`
+# MAGIC ### Step 1 - Set the 'as of' date
 # COMMAND ----------
 
 run(r"""
@@ -21,7 +25,7 @@ SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fx`
+# MAGIC ### Step 2 - Lookup: currency exchange rates
 # COMMAND ----------
 
 run(r"""
@@ -31,7 +35,7 @@ SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) A
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `o_usd`
+# MAGIC ### Step 3 - Helper: orders in USD
 # COMMAND ----------
 
 run(r"""
@@ -42,9 +46,7 @@ FROM ${catalog}.${silver}.orders o JOIN fx USING (currency)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `campaign_attribution`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- multi-touch attribution (7-day lookback, last 12 months)
+# MAGIC ### Step 4 - Give each order's credit to the campaigns that led to it
 # COMMAND ----------
 
 run(r"""
@@ -69,9 +71,7 @@ FROM j
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `campaign_performance`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- campaign performance (daily)
+# MAGIC ### Step 5 - Daily results per campaign
 # COMMAND ----------
 
 run(r"""
@@ -110,9 +110,7 @@ LEFT JOIN att USING (campaign_id, report_date) LEFT JOIN mg USING (campaign_id, 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `campaign_holdout_results`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- holdout lift: top batch email campaigns vs. contactable-but-not-sent
+# MAGIC ### Step 6 - Sent vs not-sent comparison (lift)
 # COMMAND ----------
 
 run(r"""
@@ -146,9 +144,7 @@ FROM s WHERE nt > 0 AND nc > 0
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `cohort_retention`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- acquisition cohorts
+# MAGIC ### Step 7 - Retention by month of first order
 # COMMAND ----------
 
 run(r"""
@@ -169,9 +165,7 @@ FROM a JOIN sz USING (cm, ch)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `channel_kpis_daily`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- channel KPIs (daily)
+# MAGIC ### Step 8 - Daily KPIs per channel
 # COMMAND ----------
 
 run(r"""
@@ -195,9 +189,7 @@ FROM od LEFT JOIN ss USING (report_date, channel) LEFT JOIN rt USING (report_dat
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `store_kpis_daily`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- store KPIs (daily)
+# MAGIC ### Step 9 - Daily KPIs per store
 # COMMAND ----------
 
 run(r"""
@@ -221,9 +213,7 @@ LEFT JOIN ga USING (report_date, store_id) LEFT JOIN rc USING (report_date, stor
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `identity_resolution_stats`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- identity resolution stats
+# MAGIC ### Step 10 - Identity resolution summary
 # COMMAND ----------
 
 run(r"""

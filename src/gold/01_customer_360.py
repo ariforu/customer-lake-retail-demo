@@ -2,16 +2,20 @@
 # MAGIC %md
 # MAGIC # Gold 01 - Customer 360
 # MAGIC
-# MAGIC Gold Customer 360: consent gate, profile, identity map, behavioural traits
+# MAGIC **What it does:** Builds the one-row-per-customer view the CDP uses: who they are, whether we may contact them, all their identifiers, and what they have done.
 # MAGIC
-# MAGIC _Generated from `01_customer_360.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** silver customers, consent, orders, events, loyalty, sport and service tables
+# MAGIC - **Writes:** `customer_consent`, `customer_profile`, `customer_identity_map`, `customer_traits`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_customer_360`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `asof`
+# MAGIC ### Step 1 - Set the 'as of' date (latest order day)
 # COMMAND ----------
 
 run(r"""
@@ -21,7 +25,7 @@ SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fx`
+# MAGIC ### Step 2 - Lookup: currency exchange rates
 # COMMAND ----------
 
 run(r"""
@@ -31,9 +35,7 @@ SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) A
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_consent`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- consent (contactability gate)
+# MAGIC ### Step 3 - May we contact them? (per channel)
 # COMMAND ----------
 
 run(r"""
@@ -66,9 +68,7 @@ FROM ${catalog}.${silver}.customers cu LEFT JOIN c USING (unified_customer_id) L
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_profile`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- profile
+# MAGIC ### Step 4 - Customer profile (one row per customer)
 # COMMAND ----------
 
 run(r"""
@@ -102,9 +102,7 @@ LEFT JOIN city_store cs ON cs.city = a.city AND cs.country = a.country
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_identity_map`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- identity map (activation identifiers)
+# MAGIC ### Step 5 - All identifiers per customer (incl. hashed email/phone)
 # COMMAND ----------
 
 run(r"""
@@ -128,9 +126,7 @@ FROM g WHERE id_type = 'device_id'
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `o`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- traits
+# MAGIC ### Step 6 - Helper: orders in USD
 # COMMAND ----------
 
 run(r"""
@@ -141,7 +137,7 @@ FROM ${catalog}.${silver}.orders o JOIN fx USING (currency) WHERE o.unified_cust
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `t_orders`
+# MAGIC ### Step 7 - Helper: order totals per customer
 # COMMAND ----------
 
 run(r"""
@@ -157,7 +153,7 @@ FROM o GROUP BY 1
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `t_lines`
+# MAGIC ### Step 8 - Helper: what each customer buys
 # COMMAND ----------
 
 run(r"""
@@ -187,7 +183,7 @@ LEFT JOIN (SELECT unified_customer_id, max_by(sport, q) AS top_sport,
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_traits`
+# MAGIC ### Step 9 - Behaviour traits (RFM, lifecycle, affinities, running ...)
 # COMMAND ----------
 
 run(r"""

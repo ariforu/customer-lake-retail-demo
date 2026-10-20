@@ -1,12 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Bronze - Synthetic StrideForge data generator
+# MAGIC # Generate synthetic bronze data
 # MAGIC
-# MAGIC Generates the 42 bronze tables (1.5M customers at `scale = 1.0`, ~274M rows) plus the
-# MAGIC `retail_synthetic_truth` answer key. Library code lives in the `gen/` package next to this notebook.
-# MAGIC Stages: dims, persons, profiles, commerce, loyalty, digital, marketing, sport, service, ops.
+# MAGIC **What it does:** Creates realistic fake data for StrideForge (1.5M customers at scale 1.0) and loads the 42 bronze tables. Also saves the 'answer key' used to check identity resolution. Use `scale` = 0.01 for a quick test. The last stage, `cleanup`, drops the generator's scratch tables (remove it from `stages` if you want to re-run single stages).
 # MAGIC
-# MAGIC _Interactive use: if you edit files under `gen/`, detach & re-attach so Python workers pick up the new code._
+# MAGIC - **Reads:** -
+# MAGIC - **Writes:** `retail_bronze` (all tables), `retail_synthetic_truth`
+# MAGIC - **Runs in:** `strideforge_bronze_setup` -> `generate_bronze`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %pip install faker -q
@@ -21,7 +23,7 @@ import sys
 import time
 
 dbutils.widgets.text("scale", "1.0")
-dbutils.widgets.text("stages", "dims,persons,profiles,commerce,loyalty,digital,marketing,sport,service,ops")
+dbutils.widgets.text("stages", "dims,persons,profiles,commerce,loyalty,digital,marketing,sport,service,ops,cleanup")
 W = dict(P, scale=dbutils.widgets.get("scale"), stages=dbutils.widgets.get("stages"))
 os.environ.update(SF_CATALOG=W["catalog"], SF_BRONZE_SCHEMA=W["bronze"], SF_TRUTH_SCHEMA=W["truth"],
                   SF_SCALE=W["scale"], SF_IN_JOB="1")

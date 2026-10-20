@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 07 - Service & voice of customer
+# MAGIC # Silver 07 - Support, surveys and reviews
 # MAGIC
-# MAGIC Silver service + voice of customer (rule-based enrichment; 07b_ai_enrichment.sql upgrades recent reviews with AI Functions)
+# MAGIC **What it does:** Links support tickets, CSAT/NPS surveys and product reviews to customers and adds simple sentiment and theme tags.
 # MAGIC
-# MAGIC _Generated from `07_service.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** bronze Zendesk, Qualtrics and Bazaarvoice tables; `identity_graph`, `orders`
+# MAGIC - **Writes:** `service_tickets`, `surveys`, `product_reviews`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_service`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `idmap`
+# MAGIC ### Step 1 - Lookup: identifier -> customer
 # COMMAND ----------
 
 run(r"""
@@ -22,7 +26,7 @@ FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `service_tickets`
+# MAGIC ### Step 2 - Support tickets with sentiment
 # COMMAND ----------
 
 run(r"""
@@ -41,7 +45,7 @@ LEFT JOIN ${catalog}.${silver}.orders o ON o.order_id = t.order_reference
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `surveys`
+# MAGIC ### Step 3 - CSAT and NPS answers
 # COMMAND ----------
 
 run(r"""
@@ -63,7 +67,7 @@ LEFT JOIN idmap m ON m.id_type = 'email' AND m.id_value = ${catalog}.${silver}.n
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `product_reviews`
+# MAGIC ### Step 4 - Reviews with sentiment, themes and fit feedback
 # COMMAND ----------
 
 run(r"""

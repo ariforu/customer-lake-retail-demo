@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 05 - Loyalty & sport
+# MAGIC # Silver 05 - Loyalty and sport
 # MAGIC
-# MAGIC Silver loyalty + sport / community
+# MAGIC **What it does:** Links loyalty points, run-app activity, shoe mileage, race sign-ups and run-club visits to customers.
 # MAGIC
-# MAGIC _Generated from `05_loyalty_sport.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** bronze loyalty, run-app, race and run-club tables; `identity_graph`
+# MAGIC - **Writes:** `loyalty_transactions`, `loyalty_members`, `fitness_activities`, `shoe_mileage`, `event_registrations`, `run_club_attendance`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_loyalty_sport`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `idmap`
+# MAGIC ### Step 1 - Lookup: identifier -> customer
 # COMMAND ----------
 
 run(r"""
@@ -22,7 +26,7 @@ FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `loyalty_transactions`
+# MAGIC ### Step 2 - Loyalty points activity
 # COMMAND ----------
 
 run(r"""
@@ -35,7 +39,7 @@ LEFT JOIN idmap m ON m.id_type = 'loyalty_id' AND m.id_value = l.loyalty_id
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `loyalty_members`
+# MAGIC ### Step 3 - Loyalty members with tier and lifetime points
 # COMMAND ----------
 
 run(r"""
@@ -53,7 +57,7 @@ LEFT JOIN idmap m ON m.id_type = 'loyalty_id' AND m.id_value = r.loyalty_id
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `fitness_activities`
+# MAGIC ### Step 4 - Run-app activities
 # COMMAND ----------
 
 run(r"""
@@ -69,7 +73,7 @@ LEFT JOIN idmap m ON m.id_type = 'fitness_id' AND m.id_value = a.fitness_user_id
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `shoe_mileage`
+# MAGIC ### Step 5 - Miles on each registered shoe
 # COMMAND ----------
 
 run(r"""
@@ -92,7 +96,7 @@ LEFT JOIN idmap m ON m.id_type = 'fitness_id' AND m.id_value = s.fitness_user_id
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `event_registrations`
+# MAGIC ### Step 6 - Race sign-ups (duplicates removed)
 # COMMAND ----------
 
 run(r"""
@@ -107,7 +111,7 @@ QUALIFY row_number() OVER (PARTITION BY e.registration_id ORDER BY CAST(e.regist
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `run_club_attendance`
+# MAGIC ### Step 7 - Run-club visits
 # COMMAND ----------
 
 run(r"""

@@ -1,18 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # DDL - Bronze tables
+# MAGIC # Create bronze tables
 # MAGIC
-# MAGIC StrideForge CDP demo - BRONZE layer (raw, as-landed, append-only)
-# MAGIC Every table carries ingestion metadata: _ingested_at, _source_file, _source_system
+# MAGIC **What it does:** Creates the bronze schema and its 42 empty raw tables (one per source feed).
 # MAGIC
-# MAGIC _Generated from `01_bronze.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** -
+# MAGIC - **Writes:** `retail_bronze` schema and tables
+# MAGIC - **Runs in:** job `strideforge_bronze_setup` -> task `ddl_bronze`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `${bronze}`
+# MAGIC ### Step 1 - Create the bronze schema
 # COMMAND ----------
 
 run(r"""
@@ -22,9 +25,7 @@ COMMENT 'StrideForge CDP demo - raw data landed from source systems (append-only
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `pos_customers_raw`
-# MAGIC
-# MAGIC ---------------- POS (stores) ----------------
+# MAGIC ### Step 2 - `pos_customers_raw` - POS customer registrations captured at store checkout
 # COMMAND ----------
 
 run(r"""
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.pos_customers_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `pos_transactions_raw`
+# MAGIC ### Step 3 - `pos_transactions_raw` - POS transaction headers
 # COMMAND ----------
 
 run(r"""
@@ -55,7 +56,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.pos_transactions_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `pos_transaction_lines_raw`
+# MAGIC ### Step 4 - `pos_transaction_lines_raw` - POS transaction line items
 # COMMAND ----------
 
 run(r"""
@@ -69,7 +70,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.pos_transaction_lines_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `pos_returns_raw`
+# MAGIC ### Step 5 - `pos_returns_raw` - In-store returns and exchanges
 # COMMAND ----------
 
 run(r"""
@@ -83,9 +84,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.pos_returns_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `ecom_customers_raw`
-# MAGIC
-# MAGIC ---------------- E-commerce ----------------
+# MAGIC ### Step 6 - `ecom_customers_raw` - E-commerce platform customer accounts
 # COMMAND ----------
 
 run(r"""
@@ -99,7 +98,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.ecom_customers_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `ecom_orders_raw`
+# MAGIC ### Step 7 - `ecom_orders_raw` - E-commerce order headers (web + app checkout)
 # COMMAND ----------
 
 run(r"""
@@ -116,7 +115,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.ecom_orders_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `ecom_order_lines_raw`
+# MAGIC ### Step 8 - `ecom_order_lines_raw` - E-commerce order line items
 # COMMAND ----------
 
 run(r"""
@@ -130,7 +129,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.ecom_order_lines_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `ecom_returns_raw`
+# MAGIC ### Step 9 - `ecom_returns_raw` - Online returns (mail-in / return-to-store)
 # COMMAND ----------
 
 run(r"""
@@ -144,7 +143,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.ecom_returns_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `ecom_carts_raw`
+# MAGIC ### Step 10 - `ecom_carts_raw` - Cart add/remove events including abandoned carts
 # COMMAND ----------
 
 run(r"""
@@ -157,9 +156,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.ecom_carts_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `app_users_raw`
-# MAGIC
-# MAGIC ---------------- Mobile app ----------------
+# MAGIC ### Step 11 - `app_users_raw` - Mobile app user registrations
 # COMMAND ----------
 
 run(r"""
@@ -173,7 +170,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.app_users_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `app_events_raw`
+# MAGIC ### Step 12 - `app_events_raw` - Mobile app behavioural events (properties as raw JSON string)
 # COMMAND ----------
 
 run(r"""
@@ -187,7 +184,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.app_events_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `app_push_tokens_raw`
+# MAGIC ### Step 13 - `app_push_tokens_raw` - Push notification tokens by device
 # COMMAND ----------
 
 run(r"""
@@ -200,9 +197,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.app_push_tokens_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `web_clickstream_raw`
-# MAGIC
-# MAGIC ---------------- Web analytics ----------------
+# MAGIC ### Step 14 - `web_clickstream_raw` - Website clickstream events (page_view, product_view, search, size_select, add_to_cart, wishlist_add, checkout_start, purchase)
 # COMMAND ----------
 
 run(r"""
@@ -219,7 +214,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.web_clickstream_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `web_sessions_raw`
+# MAGIC ### Step 15 - `web_sessions_raw` - Website sessions
 # COMMAND ----------
 
 run(r"""
@@ -234,9 +229,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.web_sessions_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `loyalty_members_raw`
-# MAGIC
-# MAGIC ---------------- Loyalty ----------------
+# MAGIC ### Step 16 - `loyalty_members_raw` - Loyalty program members (tiers: Rookie / Pro / Elite)
 # COMMAND ----------
 
 run(r"""
@@ -251,7 +244,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.loyalty_members_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `loyalty_points_ledger_raw`
+# MAGIC ### Step 17 - `loyalty_points_ledger_raw` - Loyalty points earn / redeem / expire / tier-change ledger
 # COMMAND ----------
 
 run(r"""
@@ -264,9 +257,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.loyalty_points_ledger_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fitness_activities_raw`
-# MAGIC
-# MAGIC ---------------- Fitness / run-tracking app ----------------
+# MAGIC ### Step 18 - `fitness_activities_raw` - Activities logged in StrideForge Run app
 # COMMAND ----------
 
 run(r"""
@@ -281,7 +272,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.fitness_activities_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fitness_shoe_registrations_raw`
+# MAGIC ### Step 19 - `fitness_shoe_registrations_raw` - Shoes registered by users in the run app for mileage tracking
 # COMMAND ----------
 
 run(r"""
@@ -294,9 +285,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.fitness_shoe_registrations_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `event_registrations_raw`
-# MAGIC
-# MAGIC ---------------- Events & community ----------------
+# MAGIC ### Step 20 - `event_registrations_raw` - Race / event registrations (marathons, 5Ks, store events)
 # COMMAND ----------
 
 run(r"""
@@ -310,7 +299,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.event_registrations_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `run_club_checkins_raw`
+# MAGIC ### Step 21 - `run_club_checkins_raw` - Store-hosted run club check-ins
 # COMMAND ----------
 
 run(r"""
@@ -323,9 +312,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.run_club_checkins_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `esp_sends_raw`
-# MAGIC
-# MAGIC ---------------- ESP / messaging ----------------
+# MAGIC ### Step 22 - `esp_sends_raw` - Email / SMS / push sends from the ESP
 # COMMAND ----------
 
 run(r"""
@@ -339,7 +326,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.esp_sends_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `esp_engagement_raw`
+# MAGIC ### Step 23 - `esp_engagement_raw` - Delivery / open / click / bounce / complaint events (CDP write-back lands here)
 # COMMAND ----------
 
 run(r"""
@@ -353,7 +340,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.esp_engagement_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `esp_unsubscribes_raw`
+# MAGIC ### Step 24 - `esp_unsubscribes_raw` - Unsubscribe / STOP events
 # COMMAND ----------
 
 run(r"""
@@ -366,9 +353,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.esp_unsubscribes_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `consent_events_raw`
-# MAGIC
-# MAGIC ---------------- Consent ----------------
+# MAGIC ### Step 25 - `consent_events_raw` - Consent management platform events (GDPR / CCPA)
 # COMMAND ----------
 
 run(r"""
@@ -382,9 +367,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.consent_events_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `paid_media_daily_raw`
-# MAGIC
-# MAGIC ---------------- Paid media ----------------
+# MAGIC ### Step 26 - `paid_media_daily_raw` - Daily paid media performance (Meta, Google, TikTok, YouTube)
 # COMMAND ----------
 
 run(r"""
@@ -399,7 +382,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.paid_media_daily_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `paid_media_conversions_raw`
+# MAGIC ### Step 27 - `paid_media_conversions_raw` - Platform-reported conversions (CDP write-back / CAPI)
 # COMMAND ----------
 
 run(r"""
@@ -413,9 +396,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.paid_media_conversions_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `affiliate_codes_raw`
-# MAGIC
-# MAGIC ---------------- Affiliate / influencer ----------------
+# MAGIC ### Step 28 - `affiliate_codes_raw` - Affiliate / athlete / creator promo codes
 # COMMAND ----------
 
 run(r"""
@@ -428,7 +409,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.affiliate_codes_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `affiliate_redemptions_raw`
+# MAGIC ### Step 29 - `affiliate_redemptions_raw` - Promo code redemptions from affiliate network
 # COMMAND ----------
 
 run(r"""
@@ -441,9 +422,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.affiliate_redemptions_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `service_tickets_raw`
-# MAGIC
-# MAGIC ---------------- Customer service / VoC ----------------
+# MAGIC ### Step 30 - `service_tickets_raw` - Customer service tickets
 # COMMAND ----------
 
 run(r"""
@@ -457,7 +436,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.service_tickets_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `csat_surveys_raw`
+# MAGIC ### Step 31 - `csat_surveys_raw` - Post-ticket CSAT surveys
 # COMMAND ----------
 
 run(r"""
@@ -470,7 +449,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.csat_surveys_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `nps_surveys_raw`
+# MAGIC ### Step 32 - `nps_surveys_raw` - Relationship / transactional NPS surveys
 # COMMAND ----------
 
 run(r"""
@@ -483,7 +462,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.nps_surveys_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `product_reviews_raw`
+# MAGIC ### Step 33 - `product_reviews_raw` - Product ratings and free-text reviews
 # COMMAND ----------
 
 run(r"""
@@ -497,9 +476,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.product_reviews_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `products_raw`
-# MAGIC
-# MAGIC ---------------- Product / ERP / inventory ----------------
+# MAGIC ### Step 34 - `products_raw` - PIM product styles (Running, Trail, Basketball, Training, Lifestyle, Apparel, Accessories)
 # COMMAND ----------
 
 run(r"""
@@ -515,7 +492,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.products_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `skus_raw`
+# MAGIC ### Step 35 - `skus_raw` - SKUs (style x colorway x size x width)
 # COMMAND ----------
 
 run(r"""
@@ -528,7 +505,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.skus_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `product_drops_raw`
+# MAGIC ### Step 36 - `product_drops_raw` - Limited-edition drop / launch calendar
 # COMMAND ----------
 
 run(r"""
@@ -542,7 +519,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.product_drops_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `price_history_raw`
+# MAGIC ### Step 37 - `price_history_raw` - Price and markdown history
 # COMMAND ----------
 
 run(r"""
@@ -555,7 +532,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.price_history_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `inventory_snapshots_raw`
+# MAGIC ### Step 38 - `inventory_snapshots_raw` - Daily inventory snapshots by store / DC
 # COMMAND ----------
 
 run(r"""
@@ -568,7 +545,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.inventory_snapshots_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `stores_raw`
+# MAGIC ### Step 39 - `stores_raw` - Store master (flagship, standard, outlet, shop-in-shop)
 # COMMAND ----------
 
 run(r"""
@@ -583,7 +560,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.stores_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `gait_analysis_raw`
+# MAGIC ### Step 40 - `gait_analysis_raw` - In-store 3D foot scan and gait analysis results
 # COMMAND ----------
 
 run(r"""
@@ -598,9 +575,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.gait_analysis_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `weather_daily_by_zip_raw`
-# MAGIC
-# MAGIC ---------------- External ----------------
+# MAGIC ### Step 41 - `weather_daily_by_zip_raw` - Daily weather actuals and forecast by postal code
 # COMMAND ----------
 
 run(r"""
@@ -613,7 +588,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.weather_daily_by_zip_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `sports_calendar_raw`
+# MAGIC ### Step 42 - `sports_calendar_raw` - School sport seasons, major races, retail moments (back-to-school, New Year)
 # COMMAND ----------
 
 run(r"""
@@ -626,7 +601,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${bronze}.sports_calendar_raw (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `zip_demographics_raw`
+# MAGIC ### Step 43 - `zip_demographics_raw` - Census-style demographics by postal code
 # COMMAND ----------
 
 run(r"""

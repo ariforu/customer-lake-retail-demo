@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 08 - Customer enrichment
+# MAGIC # Silver 08 - Addresses, households, fit and consent
 # MAGIC
-# MAGIC Silver customer enrichment (needs identity + commerce): addresses, households, fit profile, consent
+# MAGIC **What it does:** Adds addresses, groups customers into households, works out shoe/apparel sizes, and records each customer's latest consent.
 # MAGIC
-# MAGIC _Generated from `08_customer_enrichment.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** `customer_source_records`, `identity_graph`, `orders`, `order_lines`; bronze gait-lab and consent tables
+# MAGIC - **Writes:** `customer_addresses`, `households`, `customers` (updated), `customer_fit_profile`, `consent`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_customer_enrichment`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `idmap`
+# MAGIC ### Step 1 - Lookup: identifier -> customer
 # COMMAND ----------
 
 run(r"""
@@ -22,7 +26,7 @@ FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `rec`
+# MAGIC ### Step 2 - Source records with their customer id
 # COMMAND ----------
 
 run(r"""
@@ -34,7 +38,7 @@ JOIN (SELECT DISTINCT source_record_key, unified_customer_id FROM ${catalog}.${s
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_addresses`
+# MAGIC ### Step 3 - Customer addresses (latest one is primary)
 # COMMAND ----------
 
 run(r"""
@@ -60,7 +64,7 @@ FROM d
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `households`
+# MAGIC ### Step 4 - Group customers living at the same address
 # COMMAND ----------
 
 run(r"""
@@ -85,7 +89,7 @@ FROM p LEFT JOIN kids USING (unified_customer_id) GROUP BY p.hkey
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Merge `customers`
+# MAGIC ### Step 5 - Add household, primary address and home store to each customer
 # COMMAND ----------
 
 run(r"""
@@ -109,7 +113,7 @@ WHEN MATCHED THEN UPDATE SET c.primary_address_id = s.address_id, c.household_id
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_fit_profile`
+# MAGIC ### Step 6 - Shoe and apparel sizes (gait lab first, then purchases)
 # COMMAND ----------
 
 run(r"""
@@ -153,7 +157,7 @@ LEFT JOIN gait USING (unified_customer_id)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `consent`
+# MAGIC ### Step 7 - Latest consent per customer and channel
 # COMMAND ----------
 
 run(r"""

@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Gold 02 - Predictions & products
+# MAGIC # Gold 02 - Scores, recommendations and product feed
 # MAGIC
-# MAGIC Gold: product feed, propensity scores (transparent heuristic_v1 baseline), recommendations, basket affinity, snapshots
+# MAGIC **What it does:** Builds the product feed, simple rule-based scores (value, churn risk, shoe replacement date ...), top-5 product picks per customer, 'bought together' pairs and monthly customer snapshots.
 # MAGIC
-# MAGIC _Generated from `02_predictions_products.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** gold Customer 360 tables; silver products, prices, inventory, orders, reviews, shoe mileage
+# MAGIC - **Writes:** `product_catalog_enriched`, `customer_predictions`, `customer_product_recommendations`, `product_affinity`, `customer_daily_snapshot`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_predictions_products`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `asof`
+# MAGIC ### Step 1 - Set the 'as of' date
 # COMMAND ----------
 
 run(r"""
@@ -21,9 +25,7 @@ SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `product_catalog_enriched`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- product catalog feed
+# MAGIC ### Step 2 - Product feed (price, stock, rating)
 # COMMAND ----------
 
 run(r"""
@@ -52,9 +54,7 @@ WHERE p.lifecycle_status <> 'discontinued'
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_predictions`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- predictions (heuristic baseline; swap for MLflow models later)
+# MAGIC ### Step 3 - Scores: value, churn risk, shoe replacement date ...
 # COMMAND ----------
 
 run(r"""
@@ -108,9 +108,7 @@ FROM s
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_product_recommendations`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- recommendations (size- and inventory-aware)
+# MAGIC ### Step 4 - Top-5 products per customer in their size
 # COMMAND ----------
 
 run(r"""
@@ -155,7 +153,7 @@ QUALIFY row_number() OVER (PARTITION BY unified_customer_id ORDER BY score DESC,
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Merge `customer_predictions`
+# MAGIC ### Step 5 - Add the #1 recommended style to the scores
 # COMMAND ----------
 
 run(r"""
@@ -167,9 +165,7 @@ WHEN MATCHED THEN UPDATE SET t.next_best_style_id = s.style_id
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `product_affinity`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- basket affinity (style level)
+# MAGIC ### Step 6 - Products often bought together
 # COMMAND ----------
 
 run(r"""
@@ -189,9 +185,7 @@ FROM pr CROSS JOIN tot JOIN s sa ON sa.style_id = pr.a JOIN s sc ON sc.style_id 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `customer_daily_snapshot`
-# MAGIC
-# MAGIC ---------------------------------------------------------------- month-end customer snapshots (last 6 months)
+# MAGIC ### Step 7 - Month-end customer snapshots
 # COMMAND ----------
 
 run(r"""

@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 00 - Standardization functions
+# MAGIC # Silver 00 - Cleanup functions
 # MAGIC
-# MAGIC Reusable standardization functions used by identity resolution and conformance
+# MAGIC **What it does:** Creates small SQL functions used to clean and compare customer data: email, phone, name, street and postal code.
 # MAGIC
-# MAGIC _Generated from `00_functions.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** -
+# MAGIC - **Writes:** SQL functions in `retail_silver`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_functions`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fix_email_domain`
+# MAGIC ### Step 1 - Fix common email domain typos (gmial.com -> gmail.com)
 # COMMAND ----------
 
 run(r"""
@@ -24,7 +28,7 @@ RETURN CASE d WHEN 'gmial.com' THEN 'gmail.com' WHEN 'yaho.com' THEN 'yahoo.com'
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `norm_email`
+# MAGIC ### Step 2 - Standardize emails (lower case, drop +tags, gmail dots)
 # COMMAND ----------
 
 run(r"""
@@ -39,7 +43,7 @@ RETURN CASE WHEN e IS NULL OR instr(e, '@') = 0 THEN NULL ELSE concat(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `norm_phone`
+# MAGIC ### Step 3 - Standardize phone numbers to +country format
 # COMMAND ----------
 
 run(r"""
@@ -60,7 +64,7 @@ RETURN CASE
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `norm_name`
+# MAGIC ### Step 4 - Keep letters only, lower case
 # COMMAND ----------
 
 run(r"""
@@ -71,7 +75,7 @@ RETURN nullif(regexp_replace(lower(trim(s)), '[^\\p{L}]', ''), '')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `canon_first_name`
+# MAGIC ### Step 5 - Turn nicknames into full names (Bob -> Robert)
 # COMMAND ----------
 
 run(r"""
@@ -89,7 +93,7 @@ RETURN CASE ${catalog}.${silver}.norm_name(s)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `std_street`
+# MAGIC ### Step 6 - Standardize street lines (Street -> st)
 # COMMAND ----------
 
 run(r"""
@@ -102,7 +106,7 @@ RETURN nullif(trim(regexp_replace(regexp_replace(regexp_replace(regexp_replace(r
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `postal_from_text`
+# MAGIC ### Step 7 - Pull the postal code out of an address string
 # COMMAND ----------
 
 run(r"""
@@ -113,7 +117,7 @@ RETURN nullif(regexp_extract(s, '([A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}|[A-Z][0-9][
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `country_from_postal`
+# MAGIC ### Step 8 - Guess the country from the postal code format
 # COMMAND ----------
 
 run(r"""

@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 04 - Digital behaviour
+# MAGIC # Silver 04 - Website and app behaviour
 # MAGIC
-# MAGIC Silver digital behaviour: unified web + app events with identity stitching, sessionized
+# MAGIC **What it does:** Combines web and app events into one table, links them to customers, and groups them into sessions.
 # MAGIC
-# MAGIC _Generated from `04_behavior.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** bronze web clickstream and app events; `identity_graph`
+# MAGIC - **Writes:** `web_app_events`, `sessions`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_behavior`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `idmap`
+# MAGIC ### Step 1 - Lookup: identifier -> customer
 # COMMAND ----------
 
 run(r"""
@@ -22,7 +26,7 @@ FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `web_app_events`
+# MAGIC ### Step 2 - One table of web and app events, linked to customers
 # COMMAND ----------
 
 run(r"""
@@ -53,7 +57,7 @@ LEFT JOIN ${catalog}.${silver}.products p ON p.style_id = split_part(x.sku, '-',
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `sessions`
+# MAGIC ### Step 3 - Group events into visits (sessions)
 # COMMAND ----------
 
 run(r"""

@@ -1,9 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Bronze - Row counts and story checks
+# MAGIC # Check the bronze data
 # MAGIC
-# MAGIC Verifies the business stories are present in bronze (CloudStride 3 returns, BF unsubscribe spike,
-# MAGIC reseller clusters, seasonality, funnel, worn-out shoes, rainy autumn).
+# MAGIC **What it does:** Prints row counts and checks that the demo stories are visible in the data (CloudStride 3 returns, Black Friday unsubscribes, reseller clusters, seasonality, worn-out shoes, rainy autumn).
+# MAGIC
+# MAGIC - **Reads:** `retail_bronze`
+# MAGIC - **Writes:** - (report only)
+# MAGIC - **Runs in:** `strideforge_bronze_setup` -> `validate_bronze`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params

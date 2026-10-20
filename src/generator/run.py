@@ -9,7 +9,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-STAGES = ["dims", "persons", "profiles", "commerce", "loyalty", "digital", "marketing", "sport", "service", "ops"]
+STAGES = ["dims", "persons", "profiles", "commerce", "loyalty", "digital", "marketing", "sport", "service", "ops", "cleanup"]
 
 if __name__ == "__main__":
     from gen.config import N_PERSONS, SCALE, get_spark

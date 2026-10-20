@@ -1,19 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 07b - AI Functions review enrichment
+# MAGIC # Silver 07b - AI review tagging
 # MAGIC
-# MAGIC AI Functions enrichment on the most recent reviews (bounded sample keeps cost and latency predictable).
-# MAGIC Overwrites the rule-based ai_* columns for those rows.
-# MAGIC materialize once so the AI calls are not re-evaluated by MERGE
+# MAGIC **What it does:** Uses Databricks AI Functions to tag sentiment, fit feedback and main theme for the 20,000 newest reviews (replaces the simple rule-based tags for those rows).
 # MAGIC
-# MAGIC _Generated from `07b_ai_enrichment.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** `product_reviews`
+# MAGIC - **Writes:** `product_reviews` (updated)
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_ai_review_enrichment`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `_ai_reviews`
+# MAGIC ### Step 1 - Run AI Functions on the 20K newest reviews (saved once)
 # COMMAND ----------
 
 run(r"""
@@ -27,7 +29,7 @@ FROM (SELECT review_id, review_text FROM ${catalog}.${silver}.product_reviews OR
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Merge `product_reviews`
+# MAGIC ### Step 2 - Write the AI tags back to the reviews table
 # COMMAND ----------
 
 run(r"""
@@ -41,7 +43,7 @@ WHEN MATCHED THEN UPDATE SET
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Drop `_ai_reviews`
+# MAGIC ### Step 3 - Remove the temporary table
 # COMMAND ----------
 
 run(r"""

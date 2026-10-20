@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 03 - Commerce
+# MAGIC # Silver 03 - Orders, returns and carts
 # MAGIC
-# MAGIC Silver commerce: unified orders / lines / returns / carts across e-commerce + POS, identity-stitched
+# MAGIC **What it does:** Combines online and store sales into one set of tables and links each order, return and cart to a customer.
 # MAGIC
-# MAGIC _Generated from `03_commerce.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** bronze e-com and POS orders, lines, returns, carts; `identity_graph`
+# MAGIC - **Writes:** `orders`, `order_lines`, `returns`, `carts`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_commerce`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `idmap`
+# MAGIC ### Step 1 - Lookup: identifier -> customer
 # COMMAND ----------
 
 run(r"""
@@ -22,7 +26,7 @@ FROM ${catalog}.${silver}.identity_graph GROUP BY id_type, id_value
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fx`
+# MAGIC ### Step 2 - Lookup: currency exchange rates
 # COMMAND ----------
 
 run(r"""
@@ -32,7 +36,7 @@ SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) A
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `orders`
+# MAGIC ### Step 3 - One table of all orders (web, app, store), linked to customers
 # COMMAND ----------
 
 run(r"""
@@ -68,7 +72,7 @@ SELECT *, to_date(order_ts) AS order_date FROM (SELECT * FROM e UNION ALL SELECT
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `order_lines`
+# MAGIC ### Step 4 - Order lines with product, category and margin
 # COMMAND ----------
 
 run(r"""
@@ -88,7 +92,7 @@ LEFT JOIN fx ON fx.currency = o.currency
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `returns`
+# MAGIC ### Step 5 - Returns with a standard reason (too small, too big ...)
 # COMMAND ----------
 
 run(r"""
@@ -111,7 +115,7 @@ FROM r JOIN ${catalog}.${silver}.orders o USING (order_id)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `carts`
+# MAGIC ### Step 6 - Carts: converted, abandoned or active
 # COMMAND ----------
 
 run(r"""

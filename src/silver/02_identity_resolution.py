@@ -1,12 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 02 - Identity resolution
+# MAGIC # Silver 02 - Identity resolution (who is who)
 # MAGIC
-# MAGIC Identity resolution: source profiles -> match pairs -> connected components -> identity graph -> golden customer.
+# MAGIC **What it does:** Finds which records from different systems belong to the same person and gives each person one `unified_customer_id`. Then builds one best-version customer record.
 # MAGIC
-# MAGIC Match rules (accepted when the key is shared by 2..25 records, avoiding hub keys):
-# MAGIC   deterministic: normalized email, E.164 phone, loyalty id, POS transaction card scan, run-app order reference
-# MAGIC   probabilistic: canonical first name + last name + postal code, canonical first name + last name + birth date
+# MAGIC - **Reads:** bronze customer profiles from e-com, POS, loyalty, app, run app and race partners
+# MAGIC - **Writes:** `customer_source_records`, `identity_match_pairs`, `identity_graph`, `customers`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_identity_resolution`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
@@ -23,7 +25,10 @@ def sql(q):
     return spark.sql(q)
 # COMMAND ----------
 
-# ------------------------------------------------------------------ 1. standardized source records
+# MAGIC %md
+# MAGIC ### Step 1 - Put all customer records into one standard format
+# COMMAND ----------
+
 ADDR = """split({c}, ', ') AS _ap"""
 sql(f"""
 CREATE OR REPLACE TEMP VIEW src_ecom AS
@@ -120,7 +125,10 @@ FROM ({srcs})""")
 print("source records:", spark.table(f"{S}.customer_source_records").count(), flush=True)
 # COMMAND ----------
 
-# ------------------------------------------------------------------ 2. match pairs
+# MAGIC %md
+# MAGIC ### Step 2 - Find matches (same email, phone, loyalty id, or name + postal code / birthday)
+# COMMAND ----------
+
 sql(f"""
 CREATE OR REPLACE TEMP VIEW ir_keys AS
 WITH r AS (SELECT *, {fn('canon_first_name')}(first_name) AS cf, {fn('norm_name')}(last_name) AS ln,
@@ -155,7 +163,10 @@ FROM (SELECT * FROM star WHERE record_key_a <> record_key_b UNION ALL SELECT * F
 print("match pairs:", spark.table(f"{S}.identity_match_pairs").count(), flush=True)
 # COMMAND ----------
 
-# ------------------------------------------------------------------ 3. connected components (min-label propagation)
+# MAGIC %md
+# MAGIC ### Step 3 - Group matched records into people (connected components)
+# COMMAND ----------
+
 E = spark.table(f"{S}.identity_match_pairs").where("is_accepted").select(F.col("record_key_a").alias("a"), F.col("record_key_b").alias("b"))
 E = E.unionByName(E.select(F.col("b").alias("a"), F.col("a").alias("b"))).distinct()
 E.write.mode("overwrite").saveAsTable(f"{S}._ir_edges")
@@ -186,7 +197,10 @@ spark.table(f"{S}._ir_labels_{cur}").select(
     .write.mode("overwrite").saveAsTable(f"{S}._ir_resolved")
 # COMMAND ----------
 
-# ------------------------------------------------------------------ 4. identity graph
+# MAGIC %md
+# MAGIC ### Step 4 - Build the identity graph (every id -> one customer)
+# COMMAND ----------
+
 sql(f"""
 INSERT OVERWRITE {S}.identity_graph BY NAME
 WITH r AS (SELECT c.*, x.unified_customer_id FROM {S}.customer_source_records c JOIN {S}._ir_resolved x USING (source_record_key)),
@@ -216,7 +230,10 @@ SELECT unified_customer_id, source_record_key, source_system, id_type, id_value,
 FROM ids""")
 # COMMAND ----------
 
-# ------------------------------------------------------------------ 5. golden customer record (survivorship)
+# MAGIC %md
+# MAGIC ### Step 5 - Build one best record per customer
+# COMMAND ----------
+
 sql(f"""
 INSERT OVERWRITE {S}.customers BY NAME
 WITH r AS (SELECT c.*, x.unified_customer_id,
@@ -247,7 +264,10 @@ FROM g""")
 print("unified customers:", spark.table(f"{S}.customers").count(), flush=True)
 # COMMAND ----------
 
-# ------------------------------------------------------------------ 6. score against the synthetic answer key (if present)
+# MAGIC %md
+# MAGIC ### Step 6 - Check accuracy against the answer key
+# COMMAND ----------
+
 if spark.catalog.tableExists(f"{T}.identity_answer_key_profiles"):
     ev = sql(f"""
     WITH k AS (SELECT DISTINCT source_system, source_id, person_idx FROM {T}.identity_answer_key_profiles),

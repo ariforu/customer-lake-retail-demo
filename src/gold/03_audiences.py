@@ -1,12 +1,22 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Gold 03 - Audiences, triggers & exports
+# MAGIC # Gold 03 - Audiences, triggers and exports
 # MAGIC
-# MAGIC Gold audiences: segment definitions (rules as data) -> membership, journey triggers, drop calendar, audience exports.
+# MAGIC **What it does:** Defines 13 ready-made audiences as SQL rules and works out who is in each, finds today's journey triggers (abandoned cart, worn-out shoes ...), and records what would be synced to each channel.
+# MAGIC
+# MAGIC - **Reads:** gold Customer 360, scores and product feed; silver carts, sessions, returns, shoe mileage, weather
+# MAGIC - **Writes:** `segment_definitions`, `segment_membership`, `trigger_events`, `drop_calendar`, `audience_exports`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_audiences`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 1 - Define the 13 audiences as SQL rules
 # COMMAND ----------
 
 S, G = f"{a.catalog}.{a.silver}", f"{a.catalog}.{a.gold}"
@@ -48,6 +58,7 @@ SEGMENTS = [
           AND weather_date > {ASOF} AND weather_date <= {ASOF} + INTERVAL 3 DAYS)"""),
 ]
 
+# Step 2 - one row per customer with everything the rules can filter on, then compute membership
 sql(f"""CREATE OR REPLACE TEMP VIEW seg_base AS
 SELECT p.*, t.* EXCEPT (unified_customer_id, updated_at), pr.* EXCEPT (unified_customer_id)
 FROM {G}.customer_profile p JOIN {G}.customer_traits t USING (unified_customer_id)
@@ -72,7 +83,10 @@ for r in sql(f"SELECT segment_id, count(*) n FROM {G}.segment_membership GROUP B
     print(f"  {r.segment_id:28s} {r.n:>10,d}", flush=True)
 # COMMAND ----------
 
-# ---------------------------------------------------------------- journey triggers (as of the latest data day)
+# MAGIC %md
+# MAGIC ### Step 3 - Find today's journey triggers
+# COMMAND ----------
+
 sql(f"""INSERT OVERWRITE {G}.trigger_events BY NAME
 WITH asof AS (SELECT {ASOF} AS d, CAST({ASOF} AS TIMESTAMP) + INTERVAL 1 DAY AS ts),
 t AS (
@@ -122,7 +136,10 @@ SELECT concat('TG', upper(substr(sha2(concat_ws('|', unified_customer_id, trigge
 FROM t JOIN {G}.customer_profile p USING (unified_customer_id)""")
 # COMMAND ----------
 
-# ---------------------------------------------------------------- drop calendar
+# MAGIC %md
+# MAGIC ### Step 4 - Drop calendar with the eligible audience
+# COMMAND ----------
+
 sql(f"""INSERT OVERWRITE {G}.drop_calendar BY NAME
 SELECT d.drop_id, d.style_id, d.drop_name, d.release_ts, d.units_available, 'SEG-SNEAKERHEADS' AS eligible_segment_id,
        (SELECT count(*) FROM {G}.segment_membership WHERE segment_id = 'SEG-SNEAKERHEADS') AS eligible_customer_count,
@@ -130,7 +147,10 @@ SELECT d.drop_id, d.style_id, d.drop_name, d.release_ts, d.units_available, 'SEG
 FROM {S}.product_drops d""")
 # COMMAND ----------
 
-# ---------------------------------------------------------------- audience exports (consent-filtered syncs)
+# MAGIC %md
+# MAGIC ### Step 5 - Record what each channel would receive (consent applied)
+# COMMAND ----------
+
 sql(f"""INSERT OVERWRITE {G}.audience_exports BY NAME
 WITH x AS (
   SELECT 'SEG-MILEAGE-REPLACE' AS seg, 'TRG-MILEAGE-REPLACE' AS camp, 'esp' AS dest, 'email' AS idt

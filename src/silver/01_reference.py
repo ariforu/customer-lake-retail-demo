@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Silver 01 - Reference data
+# MAGIC # Silver 01 - Products, stores and reference data
 # MAGIC
-# MAGIC Silver reference / product / location / external tables
+# MAGIC **What it does:** Cleans and types the product catalog, prices, inventory, stores, weather, sports calendar and demographics.
 # MAGIC
-# MAGIC _Generated from `01_reference.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** bronze product, price, inventory, store, weather, calendar and demographics tables
+# MAGIC - **Writes:** `products`, `skus`, `product_drops`, `price_history`, `inventory_daily`, `stores`, `weather_daily`, `sports_calendar`, `zip_demographics`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `silver_reference`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `products`
+# MAGIC ### Step 1 - Products
 # COMMAND ----------
 
 run(r"""
@@ -25,7 +29,7 @@ QUALIFY row_number() OVER (PARTITION BY style_id ORDER BY _ingested_at DESC) = 1
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `skus`
+# MAGIC ### Step 2 - SKUs (style, colour and size)
 # COMMAND ----------
 
 run(r"""
@@ -38,7 +42,7 @@ QUALIFY row_number() OVER (PARTITION BY sku ORDER BY _ingested_at DESC) = 1
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `product_drops`
+# MAGIC ### Step 3 - Limited drops
 # COMMAND ----------
 
 run(r"""
@@ -50,7 +54,7 @@ FROM ${catalog}.${bronze}.product_drops_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `price_history`
+# MAGIC ### Step 4 - Price history
 # COMMAND ----------
 
 run(r"""
@@ -62,7 +66,7 @@ FROM ${catalog}.${bronze}.price_history_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `inventory_daily`
+# MAGIC ### Step 5 - Daily inventory
 # COMMAND ----------
 
 run(r"""
@@ -74,7 +78,7 @@ FROM ${catalog}.${bronze}.inventory_snapshots_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `stores`
+# MAGIC ### Step 6 - Stores
 # COMMAND ----------
 
 run(r"""
@@ -86,7 +90,7 @@ FROM ${catalog}.${bronze}.stores_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `weather_daily`
+# MAGIC ### Step 7 - Weather (with rain and cold flags)
 # COMMAND ----------
 
 run(r"""
@@ -98,7 +102,7 @@ FROM ${catalog}.${bronze}.weather_daily_by_zip_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `sports_calendar`
+# MAGIC ### Step 8 - Sports and retail calendar
 # COMMAND ----------
 
 run(r"""
@@ -110,7 +114,7 @@ FROM ${catalog}.${bronze}.sports_calendar_raw
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Insert `zip_demographics`
+# MAGIC ### Step 9 - Demographics by postal code
 # COMMAND ----------
 
 run(r"""

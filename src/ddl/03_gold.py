@@ -1,11 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # DDL - Gold tables
+# MAGIC # Create gold tables
 # MAGIC
-# MAGIC StrideForge CDP demo - GOLD layer (customer 360, features, audiences, measurement)
-# MAGIC Tables tagged cdp_activation = 'true' are consumed by the CDP / activation layer
+# MAGIC **What it does:** Creates the gold schema and its 21 core tables with a description on every table and column. Safe to re-run: it only refreshes descriptions on existing tables.
 # MAGIC
-# MAGIC _Generated from `03_gold.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** -
+# MAGIC - **Writes:** `retail_gold` schema and tables
+# MAGIC - **Runs in:** `strideforge_bronze_setup` -> `ddl_gold`; `strideforge_medallion` -> `ensure_gold_tables`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
@@ -44,7 +47,7 @@ def ddl(stmt):
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `${gold}`
+# MAGIC ### Step 1 - Create the gold schema
 # COMMAND ----------
 
 ddl(r"""
@@ -54,9 +57,7 @@ COMMENT 'StrideForge CDP demo - GOLD: Customer 360, predictive scores, audiences
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_profile`
-# MAGIC
-# MAGIC ================= CDP-CONSUMED (activation) =================
+# MAGIC ### Step 2 - `customer_profile` - Customer 360 profile - one row per unified customer (1.53M) with contact details, primary address, household, home/nearest store, loyalty ti
 # COMMAND ----------
 
 ddl(r"""
@@ -103,7 +104,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_identity_map`
+# MAGIC ### Step 3 - `customer_identity_map` - all activation identifiers per customer - normalized and SHA-256 hashed email/phone, mobile ad ids, device ids, cookies, push tokens, loyalt
 # COMMAND ----------
 
 ddl(r"""
@@ -121,7 +122,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_consent`
+# MAGIC ### Step 4 - `customer_consent` - contactability gate per customer - email/SMS/push marketing, paid media targeting, profiling, do-not-sell and global suppression (repeated b
 # COMMAND ----------
 
 ddl(r"""
@@ -144,7 +145,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_traits`
+# MAGIC ### Step 5 - `customer_traits` - behavioural traits per customer - order history (USD), RFM scores and segment, lifecycle stage, preferred channel/store, category and sport
 # COMMAND ----------
 
 ddl(r"""
@@ -200,7 +201,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_predictions`
+# MAGIC ### Step 6 - `customer_predictions` - predictive scores per customer - 12-month CLV and tier, churn probability and band, next best category/style, 30-day purchase propensity, pr
 # COMMAND ----------
 
 ddl(r"""
@@ -233,7 +234,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_product_recommendations`
+# MAGIC ### Step 7 - `customer_product_recommendations` - top-5 product recommendations per customer in their size, inventory-aware (replenish / back in stock / new arrival / cross-sell)
 # COMMAND ----------
 
 ddl(r"""
@@ -254,7 +255,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `segment_definitions`
+# MAGIC ### Step 8 - `segment_definitions` - 13 segment definitions with SQL rules (mileage replacement, CS3 fit save, goal race, high value at risk, win-back, sneakerheads, reseller su
 # COMMAND ----------
 
 ddl(r"""
@@ -276,7 +277,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `segment_membership`
+# MAGIC ### Step 9 - `segment_membership` - customer x segment membership with a 10% deterministic holdout flag
 # COMMAND ----------
 
 ddl(r"""
@@ -294,7 +295,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `trigger_events`
+# MAGIC ### Step 10 - `trigger_events` - cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, l
 # COMMAND ----------
 
 ddl(r"""
@@ -314,7 +315,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `product_catalog_enriched`
+# MAGIC ### Step 11 - `product_catalog_enriched` - SKU product feed for personalization - current price and markdown, online/store availability and stock status, rating and fit feedback, new-
 # COMMAND ----------
 
 ddl(r"""
@@ -349,7 +350,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `audience_exports`
+# MAGIC ### Step 12 - `audience_exports` - which customers of which segment were synced to which destination (ESP, Meta, Google), consent-filtered and excluding holdouts
 # COMMAND ----------
 
 ddl(r"""
@@ -368,9 +369,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_daily_snapshot`
-# MAGIC
-# MAGIC ================= Analytics / supporting gold =================
+# MAGIC ### Step 13 - `customer_daily_snapshot` - Month-end customer snapshots for the last 6 months: lifecycle, RFM-style segment, tier, 12-month revenue/orders, churn and CLV as of each sn
 # COMMAND ----------
 
 ddl(r"""
@@ -390,7 +389,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_daily_snapshot (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `product_affinity`
+# MAGIC ### Step 14 - `product_affinity` - Style-level basket affinity (support, confidence, lift) for cross-sell, pairs seen in >=30 multi-item orders
 # COMMAND ----------
 
 ddl(r"""
@@ -408,7 +407,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.product_affinity (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `drop_calendar`
+# MAGIC ### Step 15 - `drop_calendar` - Limited drops with the eligible audience (sneakerheads) and early-access window
 # COMMAND ----------
 
 ddl(r"""
@@ -427,7 +426,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.drop_calendar (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `campaign_performance`
+# MAGIC ### Step 16 - `campaign_performance` - Daily campaign KPIs per campaign and channel: audience, sends, delivered, opens, clicks, unsubscribes, impressions, spend, attributed conver
 # COMMAND ----------
 
 ddl(r"""
@@ -457,7 +456,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_performance (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `campaign_attribution`
+# MAGIC ### Step 17 - `campaign_attribution` - Order-to-campaign attribution for the last 12 months: last-touch and linear models over clicks, UTM visits and paid touchpoints in a 7-day l
 # COMMAND ----------
 
 ddl(r"""
@@ -477,7 +476,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_attribution (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `campaign_holdout_results`
+# MAGIC ### Step 18 - `campaign_holdout_results` - Incrementality for the 20 largest batch email campaigns: recipients vs email-contactable customers not sent, 7-day conversion and revenue, l
 # COMMAND ----------
 
 ddl(r"""
@@ -500,7 +499,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_holdout_results (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `cohort_retention`
+# MAGIC ### Step 19 - `cohort_retention` - Acquisition cohort retention and cumulative revenue per customer by month since first order and acquisition channel (online/store)
 # COMMAND ----------
 
 ddl(r"""
@@ -518,7 +517,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.cohort_retention (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `channel_kpis_daily`
+# MAGIC ### Step 20 - `channel_kpis_daily` - Daily KPIs per sales channel (web, app, store): sessions, orders, customers, new customers, revenue (USD), AOV, conversion, return and cart-
 # COMMAND ----------
 
 ddl(r"""
@@ -526,7 +525,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.channel_kpis_daily (
   report_date DATE NOT NULL COMMENT 'Calendar date the metrics are reported for.',
   channel STRING COMMENT 'Sales channel: web, app or store.',
   sessions BIGINT COMMENT 'Web/app sessions (analytics window only; null for store).',
-  orders BIGINT COMMENT 'Orders.',
+  orders BIGINT COMMENT 'Number of orders placed that day in the channel.',
   customers BIGINT COMMENT 'Distinct identified customers ordering.',
   new_customers BIGINT COMMENT 'Customers placing their first order that day.',
   revenue DECIMAL(14,2) COMMENT 'Net revenue (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
@@ -539,7 +538,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.channel_kpis_daily (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `store_kpis_daily`
+# MAGIC ### Step 21 - `store_kpis_daily` - Daily KPIs per store: transactions, identified-customer share, revenue, units, AOV, returns, gait analyses, run-club check-ins, BOPIS pickup
 # COMMAND ----------
 
 ddl(r"""
@@ -562,7 +561,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.store_kpis_daily (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `identity_resolution_stats`
+# MAGIC ### Step 22 - `identity_resolution_stats` - Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer,
 # COMMAND ----------
 
 ddl(r"""

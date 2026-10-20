@@ -1,17 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # DDL - Silver tables
+# MAGIC # Create silver tables
 # MAGIC
-# MAGIC StrideForge CDP demo - SILVER layer (cleansed, conformed, identity-resolved)
+# MAGIC **What it does:** Creates the silver schema and its 37 empty cleaned tables. Safe to re-run: existing tables are left as they are.
 # MAGIC
-# MAGIC _Generated from `02_silver.sql`; parameters come from widgets / job base_parameters._
+# MAGIC - **Reads:** -
+# MAGIC - **Writes:** `retail_silver` schema and tables
+# MAGIC - **Runs in:** `strideforge_bronze_setup` -> `ddl_silver`; `strideforge_medallion` -> `ensure_tables`
+# MAGIC
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `${silver}`
+# MAGIC ### Step 1 - Create the silver schema
 # COMMAND ----------
 
 run(r"""
@@ -21,9 +25,7 @@ COMMENT 'StrideForge CDP demo - cleansed, standardized, identity-resolved entiti
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_source_records`
-# MAGIC
-# MAGIC ---------------- Identity ----------------
+# MAGIC ### Step 2 - `customer_source_records` - All source customer profiles in one standardized shape - input to identity resolution
 # COMMAND ----------
 
 run(r"""
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.customer_source_records (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `identity_match_pairs`
+# MAGIC ### Step 3 - `identity_match_pairs` - Candidate record pairs with match rule and score
 # COMMAND ----------
 
 run(r"""
@@ -56,7 +58,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.identity_match_pairs (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `identity_graph`
+# MAGIC ### Step 4 - `identity_graph` - Resolved identity graph: every identifier mapped to unified_customer_id
 # COMMAND ----------
 
 run(r"""
@@ -70,9 +72,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.identity_graph (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customers`
-# MAGIC
-# MAGIC ---------------- Customer ----------------
+# MAGIC ### Step 5 - `customers` - Golden customer record after survivorship rules
 # COMMAND ----------
 
 run(r"""
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.customers (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_addresses`
+# MAGIC ### Step 6 - `customer_addresses` - Standardized and geocoded customer addresses
 # COMMAND ----------
 
 run(r"""
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.customer_addresses (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `households`
+# MAGIC ### Step 7 - `households` - Households inferred from shared address / surname
 # COMMAND ----------
 
 run(r"""
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.households (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `customer_fit_profile`
+# MAGIC ### Step 8 - `customer_fit_profile` - Customer fit profile from gait lab, purchases and returns
 # COMMAND ----------
 
 run(r"""
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.customer_fit_profile (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `consent`
+# MAGIC ### Step 9 - `consent` - Latest consent state per customer x channel x purpose
 # COMMAND ----------
 
 run(r"""
@@ -145,9 +145,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.consent (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `products`
-# MAGIC
-# MAGIC ---------------- Product / location ----------------
+# MAGIC ### Step 10 - `products` - Product styles
 # COMMAND ----------
 
 run(r"""
@@ -163,7 +161,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.products (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `skus`
+# MAGIC ### Step 11 - `skus` - Sellable SKUs
 # COMMAND ----------
 
 run(r"""
@@ -176,7 +174,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.skus (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `product_drops`
+# MAGIC ### Step 12 - `product_drops` - Limited-edition drops
 # COMMAND ----------
 
 run(r"""
@@ -189,7 +187,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.product_drops (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `price_history`
+# MAGIC ### Step 13 - `price_history` - SCD2-style price history
 # COMMAND ----------
 
 run(r"""
@@ -201,7 +199,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.price_history (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `inventory_daily`
+# MAGIC ### Step 14 - `inventory_daily` - Daily available inventory by location and SKU
 # COMMAND ----------
 
 run(r"""
@@ -213,7 +211,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.inventory_daily (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `stores`
+# MAGIC ### Step 15 - `stores` - Store master
 # COMMAND ----------
 
 run(r"""
@@ -228,9 +226,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.stores (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `orders`
-# MAGIC
-# MAGIC ---------------- Commerce ----------------
+# MAGIC ### Step 16 - `orders` - Unified orders across POS, web and app
 # COMMAND ----------
 
 run(r"""
@@ -249,7 +245,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.orders (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `order_lines`
+# MAGIC ### Step 17 - `order_lines` - Unified order lines
 # COMMAND ----------
 
 run(r"""
@@ -263,7 +259,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.order_lines (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `returns`
+# MAGIC ### Step 18 - `returns` - Unified returns with standardized reasons
 # COMMAND ----------
 
 run(r"""
@@ -278,7 +274,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.returns (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `carts`
+# MAGIC ### Step 19 - `carts` - Cart lifecycle including abandoned carts
 # COMMAND ----------
 
 run(r"""
@@ -292,9 +288,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.carts (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `web_app_events`
-# MAGIC
-# MAGIC ---------------- Behaviour ----------------
+# MAGIC ### Step 20 - `web_app_events` - Unified digital events with identity stitched
 # COMMAND ----------
 
 run(r"""
@@ -310,7 +304,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.web_app_events (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `sessions`
+# MAGIC ### Step 21 - `sessions` - Sessionized digital activity
 # COMMAND ----------
 
 run(r"""
@@ -324,9 +318,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.sessions (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `loyalty_members`
-# MAGIC
-# MAGIC ---------------- Loyalty ----------------
+# MAGIC ### Step 22 - `loyalty_members` - Loyalty members
 # COMMAND ----------
 
 run(r"""
@@ -339,7 +331,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.loyalty_members (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `loyalty_transactions`
+# MAGIC ### Step 23 - `loyalty_transactions` - Loyalty points ledger
 # COMMAND ----------
 
 run(r"""
@@ -352,9 +344,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.loyalty_transactions (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `fitness_activities`
-# MAGIC
-# MAGIC ---------------- Sport & community ----------------
+# MAGIC ### Step 24 - `fitness_activities` - Run-app activities linked to customers and shoes
 # COMMAND ----------
 
 run(r"""
@@ -368,7 +358,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.fitness_activities (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `shoe_mileage`
+# MAGIC ### Step 25 - `shoe_mileage` - Cumulative mileage per registered shoe (drives replacement trigger)
 # COMMAND ----------
 
 run(r"""
@@ -382,7 +372,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.shoe_mileage (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `event_registrations`
+# MAGIC ### Step 26 - `event_registrations` - Race and event registrations
 # COMMAND ----------
 
 run(r"""
@@ -395,7 +385,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.event_registrations (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `run_club_attendance`
+# MAGIC ### Step 27 - `run_club_attendance` - Run club attendance
 # COMMAND ----------
 
 run(r"""
@@ -407,9 +397,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.run_club_attendance (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `campaigns`
-# MAGIC
-# MAGIC ---------------- Marketing ----------------
+# MAGIC ### Step 28 - `campaigns` - Campaign master (owned + paid)
 # COMMAND ----------
 
 run(r"""
@@ -425,7 +413,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.campaigns (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `message_events`
+# MAGIC ### Step 29 - `message_events` - Unified owned-channel message events
 # COMMAND ----------
 
 run(r"""
@@ -439,7 +427,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.message_events (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `paid_media_performance`
+# MAGIC ### Step 30 - `paid_media_performance` - Daily paid media performance (normalized across platforms)
 # COMMAND ----------
 
 run(r"""
@@ -453,7 +441,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.paid_media_performance (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `affiliate_redemptions`
+# MAGIC ### Step 31 - `affiliate_redemptions` - Affiliate / influencer code redemptions
 # COMMAND ----------
 
 run(r"""
@@ -467,7 +455,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.affiliate_redemptions (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `marketing_touchpoints`
+# MAGIC ### Step 32 - `marketing_touchpoints` - Customer-level marketing touchpoints for attribution
 # COMMAND ----------
 
 run(r"""
@@ -480,9 +468,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.marketing_touchpoints (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `service_tickets`
-# MAGIC
-# MAGIC ---------------- Service & VoC ----------------
+# MAGIC ### Step 33 - `service_tickets` - Customer service tickets
 # COMMAND ----------
 
 run(r"""
@@ -496,7 +482,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.service_tickets (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `surveys`
+# MAGIC ### Step 34 - `surveys` - CSAT and NPS responses
 # COMMAND ----------
 
 run(r"""
@@ -510,7 +496,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.surveys (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `product_reviews`
+# MAGIC ### Step 35 - `product_reviews` - Product reviews enriched with AI Functions
 # COMMAND ----------
 
 run(r"""
@@ -525,9 +511,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.product_reviews (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `weather_daily`
-# MAGIC
-# MAGIC ---------------- External ----------------
+# MAGIC ### Step 36 - `weather_daily` - Daily weather by postal code with trigger flags
 # COMMAND ----------
 
 run(r"""
@@ -540,7 +524,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.weather_daily (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `sports_calendar`
+# MAGIC ### Step 37 - `sports_calendar` - Sports seasons, races and retail moments
 # COMMAND ----------
 
 run(r"""
@@ -552,7 +536,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${silver}.sports_calendar (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Create `zip_demographics`
+# MAGIC ### Step 38 - `zip_demographics` - Demographics by postal code
 # COMMAND ----------
 
 run(r"""

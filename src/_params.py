@@ -2,9 +2,9 @@
 # MAGIC %md
 # MAGIC # Shared parameters
 # MAGIC
-# MAGIC Included by every StrideForge notebook via `%run ../_params`. Defines the schema widgets (filled from job
-# MAGIC `base_parameters` or set interactively), the `P` dict, and `run(sql)`, which substitutes
-# MAGIC `${catalog}` / `${bronze}` / `${silver}` / `${gold}` / `${truth}` and executes one statement.
+# MAGIC **What it does:** Creates the catalog and schema widgets, and a `run()` helper that fills them into SQL. Every other notebook includes it with `%run ../_params`.
+# MAGIC
+# MAGIC Defaults: catalog `customer_lake_si`, schemas `retail_bronze`, `retail_silver`, `retail_gold`, `retail_synthetic_truth`.
 # COMMAND ----------
 
 from types import SimpleNamespace

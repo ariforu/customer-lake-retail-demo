@@ -1,108 +1,98 @@
-# StrideForge CDP demo (Databricks)
+# StrideForge CDP demo
 
-Synthetic, story-driven Customer Data Platform demo for **StrideForge**, a fictitious global sportswear brand
-(1.5M customers, US / UK / DE / CA, Oct 2023 – Oct 2026), built as a medallion lakehouse in Unity Catalog and
-packaged as a Declarative Automation Bundle (DAB) so it can be redeployed to any workspace.
+A complete Customer Data Platform demo on Databricks for **StrideForge**, a made-up sportswear brand
+(1.5M customers in the US, UK, Germany and Canada, Oct 2023 – Oct 2026).
 
-## What gets built
+It generates realistic raw data, cleans it, works out which records belong to the same person, and builds the
+customer tables that **Customer Lake** uses for audiences and activation. Everything is packaged as a
+Databricks Asset Bundle, so it can be deployed to any workspace.
 
-| Layer | Schema (default) | Contents |
+## The three layers
+
+| Layer | Schema | What's in it |
 |---|---|---|
-| Bronze | `retail_bronze` | 42 raw source tables (POS, e-com, app, web clickstream, loyalty, run app, ESP, consent, paid media, affiliates, service, reviews, PIM, inventory, weather, ...) ~274M rows |
-| Silver | `retail_silver` | 37 conformed tables incl. identity resolution (`customer_source_records` → `identity_match_pairs` → `identity_graph` → `customers`) |
-| Gold | `retail_gold` | 21 tables: Customer 360, traits, predictions, recommendations, segments, triggers, exports, campaign measurement. Tables with `TBLPROPERTIES ('cdp_activation' = 'true')` are the activation contract for the CDP |
-| Truth | `retail_synthetic_truth` | Generator scratch tables + identity answer key (used to score identity resolution) |
+| Bronze | `retail_bronze` | 42 raw tables, as they would arrive from each system (stores, website, app, loyalty, email, ads, support, …) |
+| Silver | `retail_silver` | 37 cleaned tables, with every record linked to one customer id |
+| Gold | `retail_gold` | 31 ready-to-use tables: the customer view, scores, audiences, Customer Lake event tables and campaign results |
 
-### Business stories baked into the data
-1. Fragmented identity: ~3.4M source profiles for 1.5M real people.
-2. CloudStride 3 (launched 2026-03-05) runs half a size small: online return rate ~43%, "too small" reviews, sizing-ticket backlog; size guidance on 2026-07-15 brings returns back to ~19%.
-3. Run-app shoe mileage: runners who pass 400+ miles without replacing lapse or switch brands.
-4. Black Friday 2025 over-mailing: weekly unsubscribes jump from ~330 to ~11K.
-5. Reseller bot clusters on limited drops (shared addresses, 100+ accounts).
-6. Seasonality (Jan / Aug / BF–Dec), ~8% YoY growth, rainy autumn 2025 in the Pacific NW and UK.
+`retail_synthetic_truth` holds the generator's "answer key" (which records really belong to whom), used to check
+identity-resolution accuracy. Every gold table and column has a description in Unity Catalog.
+
+## Stories in the data
+
+1. **Messy identity** – 4.0M source records for 1.5M people; identity resolution merges them with 98% accuracy.
+2. **A shoe that runs small** – CloudStride 3 (launched Mar 2026) gets ~43% online returns for "too small" until size guidance is added in July.
+3. **Worn-out running shoes** – the run app tracks miles per shoe; runners past 400 miles who don't replace them drift away.
+4. **Too many emails** – Black Friday 2025 over-mailing makes unsubscribes jump ~30x for a week.
+5. **Resellers** – bot-like accounts sharing addresses buy up limited drops.
+6. **Seasons and weather** – peaks in January, August and Black Friday–December; a rainy autumn in Seattle and the UK.
+
+## How it runs
+
+Two jobs. Every step is a notebook with a short "what it does / reads / writes" note at the top.
+
+**1. `strideforge_bronze_setup`** – run once per workspace
+1. Create the bronze, silver and gold tables
+2. Generate the fake data into bronze
+3. Check the data and the stories
+
+**2. `strideforge_medallion`** – bronze → silver → gold (can run daily; schedule is paused)
+
+| Step | What it does |
+|---|---|
+| `silver_functions`, `silver_reference` | Cleanup functions; products, stores, prices, inventory, weather |
+| `silver_identity_resolution` | Match records across systems and give each person one `unified_customer_id` |
+| `silver_commerce`, `silver_behavior`, `silver_loyalty_sport` | Orders and returns, web/app activity, loyalty and running – all linked to customers |
+| `silver_marketing`, `silver_service`, `silver_ai_review_enrichment` | Campaigns and messages; support, surveys and reviews (AI tags on the newest 20K reviews) |
+| `silver_customer_enrichment` | Addresses, households, shoe/apparel sizes, consent |
+| `gold_customer_360` | One row per customer: profile, consent, identifiers, behaviour |
+| `gold_predictions_products` | Simple rule-based scores, top-5 product picks, product feed |
+| `gold_audiences` | 13 ready-made audiences, journey triggers, export records |
+| `gold_measurement` | Campaign credit, campaign results, holdout lift, cohort and KPI tables |
+| `gold_customer_lake` | Household table and 9 event tables for Customer Lake |
+
+## Customer Lake
+
+Point one entity at the gold tables:
+
+| Entity | Profile table (key) | Joined tables |
+|---|---|---|
+| Retail - StrideForge Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_predictions`; many:1 `household_profile`; 1:many `customer_product_recommendations`, `customer_identity_map`; 9 event tables (`purchase_events`, `return_events`, `digital_events`, `message_engagement_events`, `run_activity_events`, `loyalty_events`, `race_registration_events`, `support_events`, `review_events`) |
+
+Exact wizard settings, suggested attributes and audiences: [docs/customer_lake_setup.md](docs/customer_lake_setup.md).
 
 ## Gold data model
 
 ![Gold ER diagram](docs/gold_er.png)
 
-Activation flow (Customer 360 → audiences → destinations → measurement):
+![How the gold tables are used](docs/gold_data_model.png)
 
-![Gold activation flow](docs/gold_data_model.png)
+## Deploy
 
-Mermaid sources: `docs/gold_er.mmd`, `docs/gold_data_model.mmd`.
-
-## Customer Lake
-
-`gold_customer_lake` (notebook `src/gold/05_customer_lake.py`) publishes the objects that Customer Lake entities point at:
-`household_profile` (Household entity profile) and nine customer **event tables** (`purchase_events`, `return_events`,
-`digital_events`, `message_engagement_events`, `run_activity_events`, `loyalty_events`, `race_registration_events`,
-`support_events`, `review_events`), each validated for a unique event ID and a `TIMESTAMP` column.
-
-| Customer Lake entity | Profile table (PK) | Related tables |
-|---|---|---|
-| Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_predictions`; 1:many `customer_product_recommendations`, `customer_identity_map`; 9 event tables |
-| Household | `household_profile` (`household_id`) | 1:many `customer_profile` |
-
-Step-by-step wizard settings, recommended attributes and the segments rebuilt as Customer Lake audiences:
-[docs/customer_lake_setup.md](docs/customer_lake_setup.md).
-
-## Repository layout
-
-Every job task is a **Databricks notebook** (source-format `.py`) with widgets for `catalog`, `bronze`, `silver`,
-`gold`, `truth` (populated from job `base_parameters`, so each notebook can also be opened and run interactively).
-Shared widgets and the `run()` helper live in `src/_params.py` (included with `%run ../_params`); SQL notebooks run one
-statement per cell through `run()`, which substitutes the schema names.
-
-```
-databricks.yml                         bundle + variables + targets
-resources/
-  strideforge_bronze_setup.job.yml     DDL -> synthetic bronze generation -> story validation
-  strideforge_medallion.job.yml        bronze -> silver -> gold (17 serverless notebook tasks)
-src/
-  ddl/          01_bronze, 02_silver, 03_gold            table contracts (comments, PKs, cdp_activation tags)
-  generator/    generate_bronze, validate_bronze         notebooks; gen/ = generator library (Spark + Faker)
-  silver/       00_functions .. 08_customer_enrichment   incl. 02_identity_resolution, 07b_ai_enrichment
-  gold/         01_customer_360 .. 05_customer_lake      incl. 03_audiences, 05_customer_lake (Customer Lake objects)
-docs/           gold data model diagrams, Customer Lake setup guide
-```
-
-## Medallion job DAG
-
-```
-ensure_tables -> silver_functions -> silver_reference -> silver_identity_resolution      (ensure_gold_tables runs in parallel)
-  silver_identity_resolution -> silver_commerce -> silver_service -> silver_ai_review_enrichment
-                             -> silver_commerce -> silver_customer_enrichment
-                             -> silver_behavior -> silver_marketing (also needs commerce)
-                             -> silver_loyalty_sport
-  {ensure_gold_tables, customer_enrichment, marketing, loyalty_sport, ai_review_enrichment} -> gold_customer_360
-  gold_customer_360 -> gold_predictions_products -> gold_audiences, gold_customer_lake
-  gold_customer_360 -> gold_measurement
-```
-
-Identity resolution: deterministic keys (normalized email, E.164 phone, loyalty id, POS card scans, run-app order
-references) plus probabilistic keys (canonical first name + last name + postal code / birth date), hub keys
-(>25 records) excluded, connected components via min-label propagation with pointer jumping. Results are scored
-against the synthetic answer key in `retail_synthetic_truth.identity_resolution_eval`.
-
-`customer_predictions` uses a transparent `heuristic_v1` scoring baseline (churn, CLV, replacement date, drop hype,
-reseller risk, ...) so the whole flow runs without model training; swap in MLflow models as a next step.
-`silver_ai_review_enrichment` upgrades the 20K most recent reviews with `ai_analyze_sentiment` / `ai_classify`.
-
-## Deploy / run
-
-Requires the Databricks CLI (bundles) and a workspace with Unity Catalog + serverless jobs.
+Needs the Databricks CLI, Unity Catalog and serverless jobs.
 
 ```bash
-# this workspace (dev target)
+# this workspace (data already loaded)
 databricks bundle deploy
-databricks bundle run strideforge_medallion            # bronze already populated here
+databricks bundle run strideforge_medallion
 
-# a new workspace: create the catalog first, then
-databricks bundle deploy -t prod --profile <other> --var catalog=<catalog>
-databricks bundle run strideforge_bronze_setup -t prod --profile <other> --var catalog=<catalog>   # ~20-40 min at scale 1.0
-databricks bundle run strideforge_medallion   -t prod --profile <other> --var catalog=<catalog>
+# a new workspace (create the catalog first)
+databricks bundle deploy -t prod --profile <profile> --var catalog=<catalog>
+databricks bundle run strideforge_bronze_setup -t prod --profile <profile> --var catalog=<catalog>   # ~25 min
+databricks bundle run strideforge_medallion   -t prod --profile <profile> --var catalog=<catalog>   # ~25 min
 ```
 
-Use `--var scale=0.01` for a quick smoke test (15K customers). `src/generator/run.py` runs the same generator locally
-through Databricks Connect (`SF_SCALE=0.01 python run.py`). All schema names are bundle variables
-(`bronze_schema`, `silver_schema`, `gold_schema`, `truth_schema`).
+Add `--var scale=0.01` for a quick test (15K customers).
+
+## Folders
+
+```
+databricks.yml        bundle settings (catalog, schema names, scale, targets)
+resources/            the two job definitions
+src/_params.py        shared catalog/schema widgets
+src/ddl/              create the bronze, silver and gold tables
+src/generator/        fake-data generator (notebooks + gen/ library; run.py runs it locally via Databricks Connect)
+src/silver/           bronze -> silver notebooks
+src/gold/             silver -> gold notebooks
+docs/                 diagrams and the Customer Lake setup guide
+```

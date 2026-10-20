@@ -1,31 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Gold 05 - Customer Lake objects
+# MAGIC # Gold 05 - Customer Lake tables
 # MAGIC
-# MAGIC Publishes everything the **Customer Lake** entities point at, all in gold:
+# MAGIC **What it does:** Publishes the household table and nine customer event tables that Customer Lake entities point at, then checks Customer Lake's rules (unique event id, TIMESTAMP column).
 # MAGIC
-# MAGIC | Object | Kind | Customer Lake role | Event ID / key | Timestamp |
-# MAGIC |---|---|---|---|---|
-# MAGIC | `household_profile` | table | **Household** entity profile | `household_id` | - |
-# MAGIC | `purchase_events` | table | Customer event table | `order_id` | `order_ts` |
-# MAGIC | `return_events` | table | Customer event table | `return_id` | `return_ts` |
-# MAGIC | `digital_events` | view | Customer event table | `event_id` | `event_ts` |
-# MAGIC | `message_engagement_events` | view | Customer event table | `message_event_id` | `event_ts` |
-# MAGIC | `run_activity_events` | view | Customer event table | `activity_id` | `start_ts` |
-# MAGIC | `loyalty_events` | view | Customer event table | `ledger_id` | `activity_ts` |
-# MAGIC | `race_registration_events` | view | Customer event table | `registration_id` | `registered_at` |
-# MAGIC | `support_events` | view | Customer event table | `ticket_id` | `created_at` |
-# MAGIC | `review_events` | view | Customer event table | `review_id` | `submitted_at` |
+# MAGIC - **Reads:** gold Customer 360 tables; silver orders, returns, events, messages, run, loyalty, race, support and review tables
+# MAGIC - **Writes:** `household_profile` and `*_events` tables/views
+# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_customer_lake`
 # MAGIC
-# MAGIC Event objects only contain rows resolved to a `unified_customer_id`. The last cell asserts that every event ID is
-# MAGIC unique and every timestamp column is `TIMESTAMP` (Customer Lake requirements).
+# MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
 
 # MAGIC %run ../_params
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Household entity profile (one row per household)
+# MAGIC ### Step 1 - Household entity profile (one row per household)
 # COMMAND ----------
 
 run(r"""
@@ -96,7 +86,7 @@ ALTER TABLE ${catalog}.${gold}.household_profile ALTER COLUMN updated_at COMMENT
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Purchase events (order level, enriched with what was bought)
+# MAGIC ### Step 2 - Purchase events (order level, enriched with what was bought)
 # COMMAND ----------
 
 run(r"""
@@ -158,7 +148,7 @@ ALTER TABLE ${catalog}.${gold}.purchase_events ALTER COLUMN has_limited_drop COM
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Return events
+# MAGIC ### Step 3 - Return events
 # COMMAND ----------
 
 run(r"""
@@ -200,12 +190,12 @@ ALTER TABLE ${catalog}.${gold}.return_events ALTER COLUMN quantity COMMENT 'Unit
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Digital (web + app) events
+# MAGIC ### Step 4 - Digital (web + app) events
 # COMMAND ----------
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.digital_events (
-  event_id COMMENT 'Event id.',
+  event_id COMMENT 'Unique id of the web/app event (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   event_ts COMMENT 'Event timestamp.',
   platform COMMENT 'web, ios or android.',
@@ -231,12 +221,12 @@ FROM ${catalog}.${silver}.web_app_events WHERE unified_customer_id IS NOT NULL
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Message engagement events (email / SMS / push sends, opens, clicks, bounces, unsubscribes)
+# MAGIC ### Step 5 - Message engagement events (email / SMS / push sends, opens, clicks, bounces, unsubscribes)
 # COMMAND ----------
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.message_engagement_events (
-  message_event_id COMMENT 'Event id.',
+  message_event_id COMMENT 'Unique id of the send or engagement event (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   event_ts COMMENT 'Event timestamp.',
   channel COMMENT 'email, sms or push.',
@@ -260,12 +250,12 @@ WHERE m.unified_customer_id IS NOT NULL
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Run-app activity, loyalty, race registration, support and review events
+# MAGIC ### Step 6 - Run-app activity, loyalty, race registration, support and review events
 # COMMAND ----------
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.run_activity_events (
-  activity_id COMMENT 'Event id.',
+  activity_id COMMENT 'Unique id of the run-app activity (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   start_ts COMMENT 'Event timestamp: activity start.',
   activity_type COMMENT 'run, trail_run, treadmill_run or walk.',
@@ -290,7 +280,7 @@ WHERE a.unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.loyalty_events (
-  ledger_id COMMENT 'Event id.',
+  ledger_id COMMENT 'Unique id of the loyalty ledger entry (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   activity_ts COMMENT 'Event timestamp.',
   loyalty_id COMMENT 'Loyalty membership id.',
@@ -308,15 +298,15 @@ FROM ${catalog}.${silver}.loyalty_transactions WHERE unified_customer_id IS NOT 
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.race_registration_events (
-  registration_id COMMENT 'Event id.',
+  registration_id COMMENT 'Unique id of the race registration (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   registered_at COMMENT 'Event timestamp: when the customer registered.',
-  event_id COMMENT 'Race id.',
-  event_name COMMENT 'Race name.',
+  event_id COMMENT 'Id of the race the customer registered for.',
+  event_name COMMENT 'Name of the race (e.g. Chicago Marathon 2026).',
   event_type COMMENT 'marathon, half_marathon, 10k or 5k.',
   event_date COMMENT 'Race date.',
-  event_city COMMENT 'Race city.',
-  distance_km COMMENT 'Race distance (km).',
+  event_city COMMENT 'City where the race takes place.',
+  distance_km COMMENT 'Race distance in kilometres (5, 10, 21.1 or 42.2).',
   registration_source COMMENT 'RaceRoster, Active.com, RunSignup or StrideForge App.'
 )
 COMMENT 'Customer Lake event table (view): race registrations (event id registration_id, timestamp registered_at) with race date, type and distance. View over silver event_registrations. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/05_customer_lake).'
@@ -329,7 +319,7 @@ FROM ${catalog}.${silver}.event_registrations WHERE unified_customer_id IS NOT N
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.support_events (
-  ticket_id COMMENT 'Event id.',
+  ticket_id COMMENT 'Unique id of the support ticket (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   created_at COMMENT 'Event timestamp: ticket created.',
   channel COMMENT 'chat, email, phone or social.',
@@ -349,7 +339,7 @@ FROM ${catalog}.${silver}.service_tickets WHERE unified_customer_id IS NOT NULL
 
 run(r"""
 CREATE OR REPLACE VIEW ${catalog}.${gold}.review_events (
-  review_id COMMENT 'Event id.',
+  review_id COMMENT 'Unique id of the product review (Customer Lake event ID).',
   unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
   submitted_at COMMENT 'Event timestamp: review submitted.',
   sku COMMENT 'SKU = style_id-colorway-size (e.g. RUN0123-01-105 is colorway 01, US size 10.5).',
@@ -374,8 +364,7 @@ WHERE r.unified_customer_id IS NOT NULL
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Validate Customer Lake requirements
-# MAGIC Event ID unique, timestamp column typed `TIMESTAMP`, join key present.
+# MAGIC ### Step 7 - Validate Customer Lake requirements
 # COMMAND ----------
 
 G = f"{P['catalog']}.{P['gold']}"
