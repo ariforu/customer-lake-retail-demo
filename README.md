@@ -16,7 +16,8 @@ Databricks Asset Bundle, so it can be deployed to any workspace.
 | Gold | `retail_gold` | 20 ready-to-use tables: the customer view, scores, product feed, journey triggers and the Customer Lake event tables |
 
 `retail_synthetic_truth` holds the generator's "answer key" (which records really belong to whom), used to check
-identity-resolution accuracy. Every gold table and column has a description in Unity Catalog.
+identity-resolution accuracy. Every gold table and column has a description in Unity Catalog, and every gold
+table uses liquid clustering (customer id, plus the event time for event tables).
 
 ## Stories in the data
 
