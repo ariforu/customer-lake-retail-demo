@@ -78,7 +78,7 @@ They are refreshed by the `strideforge_medallion` job (`gold_customer_lake` task
 Column attributes: `member_count`, `has_kids`, `kids_age_bands`, `household_revenue_12m`, `household_predicted_clv_12m`,
 `any_email_contactable`, `any_paid_media_eligible`, `top_sport`, `city`, `state`, `country`, `home_store_id`.
 
-## 3. Audiences (the gold segments, rebuilt in Customer Lake)
+## 3. Audiences to build in Customer Lake
 
 | Audience | Entity | Conditions |
 |---|---|---|

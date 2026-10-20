@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Create gold tables
 # MAGIC
-# MAGIC **What it does:** Creates the gold schema and its 21 core tables with a description on every table and column. Safe to re-run: it only refreshes descriptions on existing tables.
+# MAGIC **What it does:** Creates the gold schema and its 18 core tables with a description on every table and column. Safe to re-run: it only refreshes descriptions on existing tables.
 # MAGIC
 # MAGIC - **Reads:** -
 # MAGIC - **Writes:** `retail_gold` schema and tables
@@ -255,47 +255,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 8 - `segment_definitions` - 13 segment definitions with SQL rules (mileage replacement, CS3 fit save, goal race, high value at risk, win-back, sneakerheads, reseller su
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.segment_definitions (
-  segment_id STRING NOT NULL COMMENT 'Audience id from segment_definitions (e.g. SEG-MILEAGE-REPLACE).',
-  segment_name STRING COMMENT 'Audience display name.',
-  description STRING COMMENT 'What the audience is for.',
-  segment_type STRING COMMENT 'static, dynamic, ml or lookalike.',
-  rule_sql STRING COMMENT 'SQL WHERE-clause evaluated over profile + traits + predictions to compute membership.',
-  owner STRING COMMENT 'Owning team.',
-  refresh_schedule STRING COMMENT 'How often membership is recomputed.',
-  is_active BOOLEAN COMMENT 'Whether the audience is live.',
-  created_at TIMESTAMP COMMENT 'When the definition was created.',
-  updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
-  CONSTRAINT pk_segment_definitions PRIMARY KEY (segment_id)
-) COMMENT 'CDP audiences as data: 13 segment definitions with SQL rules (mileage replacement, CS3 fit save, goal race, high value at risk, win-back, sneakerheads, reseller suspects, families, tier upgrade, lookalike seed, suppressions, email fatigue, trail + rain). Defined in notebook gold/03_audiences. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
-TBLPROPERTIES ('cdp_activation' = 'true')
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 9 - `segment_membership` - customer x segment membership with a 10% deterministic holdout flag
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.segment_membership (
-  segment_id STRING NOT NULL COMMENT 'Audience id from segment_definitions (e.g. SEG-MILEAGE-REPLACE).',
-  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
-  entered_at TIMESTAMP COMMENT 'When the customer entered the audience.',
-  exited_at TIMESTAMP COMMENT 'When the customer left the audience (null while a member).',
-  is_current BOOLEAN COMMENT 'Customer is currently a member.',
-  is_holdout BOOLEAN COMMENT 'Deterministic 10% holdout (excluded from exports) for lift measurement.',
-  refreshed_at TIMESTAMP COMMENT 'When membership was last recomputed.'
-) COMMENT 'CDP audiences: customer x segment membership with a 10% deterministic holdout flag. Derived by evaluating each segment_definitions rule over gold customer_profile + customer_traits + customer_predictions. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
-TBLPROPERTIES ('cdp_activation' = 'true')
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 10 - `trigger_events` - cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, l
+# MAGIC ### Step 8 - `trigger_events` - cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, l
 # COMMAND ----------
 
 ddl(r"""
@@ -309,13 +269,13 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.trigger_events (
   campaign_id STRING COMMENT 'Journey / triggered campaign to start (TRG-...).',
   status STRING COMMENT 'new (contactable) or suppressed (no consented channel).',
   expires_at TIMESTAMP COMMENT 'Trigger is stale after this time (trigger_ts + 7 days).'
-) COMMENT 'CDP journey triggers as of the latest data day: cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, lapse risk; status suppressed when not contactable. Derived from silver carts, sessions, web_app_events, shoe_mileage, returns and gold product_catalog_enriched, segment_membership, customer_traits/predictions. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
+) COMMENT 'CDP journey triggers as of the latest data day: cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, lapse risk; status suppressed when not contactable. Derived from silver carts, sessions, web_app_events, shoe_mileage, returns and gold product_catalog_enriched, customer_profile, customer_traits/predictions. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 11 - `product_catalog_enriched` - SKU product feed for personalization - current price and markdown, online/store availability and stock status, rating and fit feedback, new-
+# MAGIC ### Step 9 - `product_catalog_enriched` - SKU product feed for personalization - current price and markdown, online/store availability and stock status, rating and fit feedback, new-
 # COMMAND ----------
 
 ddl(r"""
@@ -350,26 +310,7 @@ TBLPROPERTIES ('cdp_activation' = 'true')
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 12 - `audience_exports` - which customers of which segment were synced to which destination (ESP, Meta, Google), consent-filtered and excluding holdouts
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.audience_exports (
-  export_id STRING NOT NULL COMMENT 'Unique export row id.',
-  segment_id STRING COMMENT 'Audience id from segment_definitions (e.g. SEG-MILEAGE-REPLACE).',
-  campaign_id STRING COMMENT 'Campaign id: EM-/SMS-/PUSH- owned campaigns, TRG- triggered flows, ME-/GO-/TI-/YO- paid campaigns (Meta/Google/TikTok/YouTube).',
-  destination STRING COMMENT 'Destination platform: esp, meta, google.',
-  unified_customer_id STRING COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
-  matched_id_type STRING COMMENT 'Identifier sent for matching (email for ESP, email_sha256 for ad platforms).',
-  exported_at TIMESTAMP COMMENT 'When the audience was synced.',
-  sync_status STRING COMMENT 'Sync outcome (synced).'
-) COMMENT 'CDP activation audit trail: which customers of which segment were synced to which destination (ESP, Meta, Google), consent-filtered and excluding holdouts. Derived from gold segment_membership + customer_profile contactability. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
-TBLPROPERTIES ('cdp_activation' = 'true')
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 13 - `customer_daily_snapshot` - Month-end customer snapshots for the last 6 months: lifecycle, RFM-style segment, tier, 12-month revenue/orders, churn and CLV as of each sn
+# MAGIC ### Step 10 - `customer_daily_snapshot` - Month-end customer snapshots for the last 6 months: lifecycle, RFM-style segment, tier, 12-month revenue/orders, churn and CLV as of each sn
 # COMMAND ----------
 
 ddl(r"""
@@ -389,7 +330,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_daily_snapshot (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 14 - `product_affinity` - Style-level basket affinity (support, confidence, lift) for cross-sell, pairs seen in >=30 multi-item orders
+# MAGIC ### Step 11 - `product_affinity` - Style-level basket affinity (support, confidence, lift) for cross-sell, pairs seen in >=30 multi-item orders
 # COMMAND ----------
 
 ddl(r"""
@@ -407,7 +348,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.product_affinity (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 15 - `drop_calendar` - Limited drops with the eligible audience (sneakerheads) and early-access window
+# MAGIC ### Step 12 - `drop_calendar` - Limited drops with the eligible audience (sneakerheads) and early-access window
 # COMMAND ----------
 
 ddl(r"""
@@ -417,16 +358,16 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.drop_calendar (
   drop_name STRING COMMENT 'Drop / collab style name.',
   release_ts TIMESTAMP COMMENT 'Release date and time.',
   units_available INT COMMENT 'Units allocated to the drop.',
-  eligible_segment_id STRING COMMENT 'Audience eligible for early access (SEG-SNEAKERHEADS).',
+  eligible_segment_id STRING COMMENT 'Audience eligible for early access (Sneakerheads: drop_hype_score >= 0.5 and reseller_risk_score < 0.5).',
   eligible_customer_count BIGINT COMMENT 'Current size of the eligible audience.',
   early_access_start_ts TIMESTAMP COMMENT 'Member early-access start (release - 1 day) when enabled.',
   is_raffle BOOLEAN COMMENT 'Drop is sold by raffle.'
-) COMMENT 'Limited drops with the eligible audience (sneakerheads) and early-access window. Derived from silver product_drops and gold segment_membership. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
+) COMMENT 'Limited drops with the eligible audience (sneakerheads) and early-access window. Derived from silver product_drops and gold customer_predictions. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
 """)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 16 - `campaign_performance` - Daily campaign KPIs per campaign and channel: audience, sends, delivered, opens, clicks, unsubscribes, impressions, spend, attributed conver
+# MAGIC ### Step 13 - `campaign_performance` - Daily campaign KPIs per campaign and channel: audience, sends, delivered, opens, clicks, unsubscribes, impressions, spend, attributed conver
 # COMMAND ----------
 
 ddl(r"""
@@ -456,7 +397,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_performance (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 17 - `campaign_attribution` - Order-to-campaign attribution for the last 12 months: last-touch and linear models over clicks, UTM visits and paid touchpoints in a 7-day l
+# MAGIC ### Step 14 - `campaign_attribution` - Order-to-campaign attribution for the last 12 months: last-touch and linear models over clicks, UTM visits and paid touchpoints in a 7-day l
 # COMMAND ----------
 
 ddl(r"""
@@ -476,7 +417,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_attribution (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 18 - `campaign_holdout_results` - Incrementality for the 20 largest batch email campaigns: recipients vs email-contactable customers not sent, 7-day conversion and revenue, l
+# MAGIC ### Step 15 - `campaign_holdout_results` - Incrementality for the 20 largest batch email campaigns: recipients vs email-contactable customers not sent, 7-day conversion and revenue, l
 # COMMAND ----------
 
 ddl(r"""
@@ -499,7 +440,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_holdout_results (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 19 - `cohort_retention` - Acquisition cohort retention and cumulative revenue per customer by month since first order and acquisition channel (online/store)
+# MAGIC ### Step 16 - `cohort_retention` - Acquisition cohort retention and cumulative revenue per customer by month since first order and acquisition channel (online/store)
 # COMMAND ----------
 
 ddl(r"""
@@ -517,7 +458,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.cohort_retention (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 20 - `channel_kpis_daily` - Daily KPIs per sales channel (web, app, store): sessions, orders, customers, new customers, revenue (USD), AOV, conversion, return and cart-
+# MAGIC ### Step 17 - `channel_kpis_daily` - Daily KPIs per sales channel (web, app, store): sessions, orders, customers, new customers, revenue (USD), AOV, conversion, return and cart-
 # COMMAND ----------
 
 ddl(r"""
@@ -538,7 +479,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.channel_kpis_daily (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 21 - `store_kpis_daily` - Daily KPIs per store: transactions, identified-customer share, revenue, units, AOV, returns, gait analyses, run-club check-ins, BOPIS pickup
+# MAGIC ### Step 18 - `store_kpis_daily` - Daily KPIs per store: transactions, identified-customer share, revenue, units, AOV, returns, gait analyses, run-club check-ins, BOPIS pickup
 # COMMAND ----------
 
 ddl(r"""
@@ -561,7 +502,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.store_kpis_daily (
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 22 - `identity_resolution_stats` - Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer,
+# MAGIC ### Step 19 - `identity_resolution_stats` - Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer,
 # COMMAND ----------
 
 ddl(r"""
@@ -592,3 +533,11 @@ if "goal_race_date" not in _cols:
     spark.sql(f"ALTER TABLE {_t} ADD COLUMNS (goal_race_date DATE COMMENT 'next half/full marathon (training goal)', "
               "goal_race_distance_km DOUBLE)")
     print("added goal_race_* columns")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Remove the old pre-built audience tables (audiences are now built in Customer Lake)
+# COMMAND ----------
+
+for _t in ("segment_definitions", "segment_membership", "audience_exports"):
+    spark.sql(f"DROP TABLE IF EXISTS {P['catalog']}.{P['gold']}.{_t}")

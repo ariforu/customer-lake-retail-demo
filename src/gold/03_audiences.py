@@ -1,11 +1,11 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Gold 03 - Audiences, triggers and exports
+# MAGIC # Gold 03 - Journey triggers and drop calendar
 # MAGIC
-# MAGIC **What it does:** Defines 13 ready-made audiences as SQL rules and works out who is in each, finds today's journey triggers (abandoned cart, worn-out shoes ...), and records what would be synced to each channel.
+# MAGIC **What it does:** Finds today's journey triggers (abandoned cart, worn-out shoes, rain on trail runners ...) and lists upcoming limited drops with the size of the eligible audience. Audiences themselves are built in Customer Lake.
 # MAGIC
 # MAGIC - **Reads:** gold Customer 360, scores and product feed; silver carts, sessions, returns, shoe mileage, weather
-# MAGIC - **Writes:** `segment_definitions`, `segment_membership`, `trigger_events`, `drop_calendar`, `audience_exports`
+# MAGIC - **Writes:** `trigger_events`, `drop_calendar`
 # MAGIC - **Runs in:** `strideforge_medallion` -> `gold_audiences`
 # MAGIC
 # MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
@@ -16,7 +16,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 1 - Define the 13 audiences as SQL rules
+# MAGIC ### Step 1 - One row per customer with profile, traits and scores
 # COMMAND ----------
 
 S, G = f"{a.catalog}.{a.silver}", f"{a.catalog}.{a.gold}"
@@ -24,67 +24,14 @@ sql = spark.sql
 
 ASOF = f"(SELECT max(order_date) FROM {S}.orders)"
 
-# Rules are WHERE-clauses evaluated against seg_base (profile + traits + predictions + consent, one row per customer)
-SEGMENTS = [
-    ("SEG-MILEAGE-REPLACE", "Runners due for new shoes", "Active registered shoe past 400 miles; email-contactable",
-     "ml", "active_shoe_miles >= 400 AND email_contactable"),
-    ("SEG-CS3-FIT-SAVE", "CloudStride 3 fit-return save", "Refunded a CloudStride 3 for 'too small' in the last 120 days",
-     "dynamic", f"""unified_customer_id IN (SELECT r.unified_customer_id FROM {S}.returns r JOIN {S}.skus k USING (sku)
-         JOIN {S}.products p USING (style_id) WHERE p.style_name LIKE 'CloudStride 3%' AND r.return_reason = 'too_small'
-         AND r.return_type = 'refund' AND r.return_ts > {ASOF} - INTERVAL 120 DAYS)"""),
-    ("SEG-GOAL-RACE-8-20WK", "Goal race in 8-20 weeks", "Next half/full marathon is 56-140 days out (training block)",
-     "dynamic", f"goal_race_date BETWEEN {ASOF} + INTERVAL 56 DAYS AND {ASOF} + INTERVAL 140 DAYS"),
-    ("SEG-HIGH-CLV-AT-RISK", "High value at risk", "Platinum/gold CLV with churn probability above 0.5",
-     "ml", "clv_tier IN ('platinum', 'gold') AND churn_probability > 0.5"),
-    ("SEG-LAPSED-WINBACK", "Lapsed win-back (discount OK)", "Lapsed >365 days, not a full-price buyer, email-contactable",
-     "dynamic", "lifecycle_stage = 'lapsed' AND coalesce(discount_sensitivity, 'mixed') <> 'full_price' AND email_contactable"),
-    ("SEG-SNEAKERHEADS", "Sneakerheads", "High drop-hype score, low reseller risk",
-     "ml", "drop_hype_score >= 0.5 AND reseller_risk_score < 0.5"),
-    ("SEG-RESELLER-SUSPECTS", "Reseller suspects (suppress from drops)", "Bought 3+ sizes of one limited drop",
-     "ml", "reseller_risk_score >= 0.6"),
-    ("SEG-BTS-FAMILIES", "Back-to-school families", "Household with kids purchases",
-     "dynamic", "size(kids_age_bands) > 0"),
-    ("SEG-TIER-UPGRADE", "Close to Elite", "Pro members within $200 of the Elite threshold",
-     "dynamic", "loyalty_tier = 'Pro' AND revenue_12m BETWEEN 800 AND 999"),
-    ("SEG-LOOKALIKE-SEED", "Lookalike seed (top 5% CLV)", "Top 5% predicted CLV and paid-media eligible",
-     "lookalike", f"paid_media_eligible AND predicted_clv_12m >= (SELECT percentile(predicted_clv_12m, 0.95) FROM {G}.customer_predictions)"),
-    ("SEG-RECENT-BUYERS-SUPPRESS", "Recent purchasers (paid suppression)", "Ordered in the last 14 days",
-     "dynamic", f"last_order_date > {ASOF} - INTERVAL 14 DAYS"),
-    ("SEG-EMAIL-FATIGUED", "Email fatigued", "Contactable but opened <5% of emails in 90 days",
-     "dynamic", "email_contactable AND email_open_rate_90d < 0.05"),
-    ("SEG-TRAIL-RAIN", "Trail runners + heavy rain in 3 days", "Trail affinity and >=8mm rain forecast in home postal code",
-     "dynamic", f"""coalesce(sport_affinity['Trail Running'], 0) >= 0.2 AND postal_code IN
-         (SELECT postal_code FROM {S}.weather_daily WHERE is_forecast AND precipitation_mm >= 8
-          AND weather_date > {ASOF} AND weather_date <= {ASOF} + INTERVAL 3 DAYS)"""),
-]
-
-# Step 2 - one row per customer with everything the rules can filter on, then compute membership
 sql(f"""CREATE OR REPLACE TEMP VIEW seg_base AS
 SELECT p.*, t.* EXCEPT (unified_customer_id, updated_at), pr.* EXCEPT (unified_customer_id)
 FROM {G}.customer_profile p JOIN {G}.customer_traits t USING (unified_customer_id)
 JOIN {G}.customer_predictions pr USING (unified_customer_id)""")
-
-defs = spark.createDataFrame(
-    [(sid, name, desc, typ, rule) for sid, name, desc, typ, rule in SEGMENTS],
-    "segment_id string, segment_name string, description string, segment_type string, rule_sql string")
-defs.createOrReplaceTempView("seg_defs")
-sql(f"""INSERT OVERWRITE {G}.segment_definitions BY NAME
-SELECT segment_id, segment_name, description, segment_type, rule_sql, 'cdp_team' AS owner, 'daily' AS refresh_schedule,
-       true AS is_active, current_timestamp() AS created_at, current_timestamp() AS updated_at FROM seg_defs""")
-
-members = " UNION ALL ".join(
-    f"SELECT '{sid}' AS segment_id, unified_customer_id FROM seg_base WHERE {rule}" for sid, _, _, _, rule in SEGMENTS)
-sql(f"""INSERT OVERWRITE {G}.segment_membership BY NAME
-SELECT segment_id, unified_customer_id, current_timestamp() AS entered_at, CAST(NULL AS TIMESTAMP) AS exited_at,
-       true AS is_current, pmod(xxhash64(unified_customer_id, segment_id), 10) = 0 AS is_holdout,
-       current_timestamp() AS refreshed_at
-FROM ({members})""")
-for r in sql(f"SELECT segment_id, count(*) n FROM {G}.segment_membership GROUP BY 1 ORDER BY 1").collect():
-    print(f"  {r.segment_id:28s} {r.n:>10,d}", flush=True)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 3 - Find today's journey triggers
+# MAGIC ### Step 2 - Find today's journey triggers
 # COMMAND ----------
 
 sql(f"""INSERT OVERWRITE {G}.trigger_events BY NAME
@@ -115,14 +62,17 @@ t AS (
   SELECT unified_customer_id, 'race_training_start', (SELECT ts FROM asof),
          map('goal_race_date', CAST(goal_race_date AS STRING), 'distance_km', CAST(goal_race_distance_km AS STRING)),
          NULL, 'TRG-RACE-16WK'
-  FROM seg_base   -- 16-week training block starts: same goal-race definition as SEG-GOAL-RACE-8-20WK
+  FROM seg_base   -- a 16-week training block starts for the goal race
   WHERE goal_race_date BETWEEN (SELECT d FROM asof) + INTERVAL 105 DAYS AND (SELECT d FROM asof) + INTERVAL 125 DAYS
   UNION ALL
-  SELECT m.unified_customer_id, 'weather_rain', (SELECT ts FROM asof), map('postal_code', p.postal_code), NULL, 'TRG-RAIN-TRAIL'
-  FROM {G}.segment_membership m JOIN {G}.customer_profile p USING (unified_customer_id) WHERE m.segment_id = 'SEG-TRAIL-RAIN'
+  SELECT unified_customer_id, 'weather_rain', (SELECT ts FROM asof), map('postal_code', postal_code), NULL, 'TRG-RAIN-TRAIL'
+  FROM seg_base   -- trail runners with >=8mm rain forecast at home in the next 3 days
+  WHERE coalesce(sport_affinity['Trail Running'], 0) >= 0.2 AND postal_code IN
+    (SELECT postal_code FROM {S}.weather_daily WHERE is_forecast AND precipitation_mm >= 8
+     AND weather_date > (SELECT d FROM asof) AND weather_date <= (SELECT d FROM asof) + INTERVAL 3 DAYS)
   UNION ALL
   SELECT unified_customer_id, 'tier_upgrade_near', (SELECT ts FROM asof), map('tier', 'Pro'), NULL, 'TRG-TIER-UPGRADE'
-  FROM {G}.segment_membership WHERE segment_id = 'SEG-TIER-UPGRADE'
+  FROM seg_base WHERE loyalty_tier = 'Pro' AND revenue_12m BETWEEN 800 AND 999
   UNION ALL
   SELECT r.unified_customer_id, 'fit_return', r.return_ts, map('return_id', r.return_id, 'reason', r.return_reason), r.sku, 'TRG-FIT-SAVE'
   FROM {S}.returns r WHERE r.is_fit_related AND r.unified_customer_id IS NOT NULL AND r.return_ts > (SELECT ts FROM asof) - INTERVAL 7 DAYS
@@ -137,30 +87,12 @@ FROM t JOIN {G}.customer_profile p USING (unified_customer_id)""")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 4 - Drop calendar with the eligible audience
+# MAGIC ### Step 3 - Drop calendar with the eligible audience size (sneakerheads)
 # COMMAND ----------
 
 sql(f"""INSERT OVERWRITE {G}.drop_calendar BY NAME
-SELECT d.drop_id, d.style_id, d.drop_name, d.release_ts, d.units_available, 'SEG-SNEAKERHEADS' AS eligible_segment_id,
-       (SELECT count(*) FROM {G}.segment_membership WHERE segment_id = 'SEG-SNEAKERHEADS') AS eligible_customer_count,
+SELECT d.drop_id, d.style_id, d.drop_name, d.release_ts, d.units_available, 'Sneakerheads' AS eligible_segment_id,
+       (SELECT count(*) FROM seg_base WHERE drop_hype_score >= 0.5 AND reseller_risk_score < 0.5) AS eligible_customer_count,
        CASE WHEN d.member_early_access THEN d.release_ts - INTERVAL 1 DAY END AS early_access_start_ts, d.is_raffle
 FROM {S}.product_drops d""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 5 - Record what each channel would receive (consent applied)
-# COMMAND ----------
-
-sql(f"""INSERT OVERWRITE {G}.audience_exports BY NAME
-WITH x AS (
-  SELECT 'SEG-MILEAGE-REPLACE' AS seg, 'TRG-MILEAGE-REPLACE' AS camp, 'esp' AS dest, 'email' AS idt
-  UNION ALL SELECT 'SEG-CS3-FIT-SAVE', 'TRG-FIT-SAVE', 'esp', 'email'
-  UNION ALL SELECT 'SEG-LOOKALIKE-SEED', 'META-LAL-SEED', 'meta', 'email_sha256'
-  UNION ALL SELECT 'SEG-RECENT-BUYERS-SUPPRESS', 'GOOGLE-SUPPRESS', 'google', 'email_sha256')
-SELECT concat('EX', upper(substr(sha2(concat_ws('|', x.seg, x.dest, m.unified_customer_id), 256), 1, 14))) AS export_id,
-       x.seg AS segment_id, x.camp AS campaign_id, x.dest AS destination, m.unified_customer_id, x.idt AS matched_id_type,
-       CAST({ASOF} AS TIMESTAMP) + INTERVAL 1 DAY + INTERVAL 6 HOURS AS exported_at, 'synced' AS sync_status
-FROM x JOIN {G}.segment_membership m ON m.segment_id = x.seg AND NOT m.is_holdout
-JOIN {G}.customer_profile p USING (unified_customer_id)
-WHERE (x.dest = 'esp' AND p.email_contactable) OR (x.dest IN ('meta', 'google') AND p.paid_media_eligible)""")
-print("triggers:", spark.table(f"{G}.trigger_events").count(), " exports:", spark.table(f"{G}.audience_exports").count(), flush=True)
+print("triggers:", spark.table(f"{G}.trigger_events").count(), " drops:", spark.table(f"{G}.drop_calendar").count(), flush=True)

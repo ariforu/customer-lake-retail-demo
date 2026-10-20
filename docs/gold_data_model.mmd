@@ -16,10 +16,7 @@ flowchart LR
     IDMAP["customer_identity_map<br/><i>email/phone hashes, MAIDs, cookies, push tokens</i>"]:::cdp
     RECS["customer_product_recommendations<br/><i>top-5 in size & in stock</i>"]:::cdp
     CATALOG["product_catalog_enriched<br/><i>SKU feed: price, stock, rating</i>"]:::cdp
-    SEGDEF["segment_definitions<br/><i>rules as SQL</i>"]:::cdp
-    SEGMEM["segment_membership<br/><i>who is in which audience (+ holdout flag)</i>"]:::cdp
     TRIG["trigger_events<br/><i>real-time journey triggers</i>"]:::cdp
-    EXPORT["audience_exports<br/><i>what was synced where</i>"]:::cdp
   end
 
   subgraph ANA["Analytics & measurement"]
@@ -35,6 +32,7 @@ flowchart LR
     IRS["identity_resolution_stats"]:::ana
   end
 
+  CL(["Customer Lake<br/>audiences & connectors"]):::ext
   DEST(["ESP / SMS / Push<br/>Meta / Google / TikTok"]):::ext
 
   PROFILE ---|"1 : 1"| CONSENT
@@ -42,22 +40,17 @@ flowchart LR
   PROFILE ---|"1 : 1"| PRED
   PROFILE -->|"1 : N  unified_customer_id"| IDMAP
   PROFILE -->|"1 : N"| RECS
-  PROFILE -->|"1 : N"| SEGMEM
   PROFILE -->|"1 : N"| TRIG
   PROFILE -->|"1 : N"| SNAP
   PROFILE -->|"1 : N"| ATTR
   CATALOG -->|"sku"| RECS
   CATALOG -->|"sku"| TRIG
   PRED -.->|"next_best_style_id"| CATALOG
-  SEGDEF -->|"1 : N  segment_id"| SEGMEM
-  SEGMEM -->|"members - holdout, consent-filtered"| EXPORT
-  CONSENT -.->|"gates every send / sync"| EXPORT
-  IDMAP -.->|"matched_id_type"| EXPORT
-  EXPORT ==> DEST
+  C360 ==>|"entity + attributes"| CL
+  CONSENT -.->|"gates every send / sync"| CL
+  CL ==> DEST
   TRIG ==> DEST
-  SEGDEF -->|"eligible_segment_id"| DROPS
   CATALOG -.->|"style_id"| AFF
   ATTR -->|"campaign_id"| PERF
-  EXPORT -.->|"campaign_id"| PERF
   PERF --- HOLD
   DEST -.->|"engagement write-back -> bronze"| PERF
