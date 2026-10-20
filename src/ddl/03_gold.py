@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Create gold tables
 # MAGIC
-# MAGIC **What it does:** Creates the gold schema and its 20 tables with a description on every table and column. Safe to re-run: it only refreshes descriptions on existing tables.
+# MAGIC **What it does:** Creates the gold schema and its 20 tables with a description on every table and column and liquid clustering keys. Safe to re-run: on existing tables it only refreshes descriptions and clustering keys.
 # MAGIC
 # MAGIC - **Reads:** -
 # MAGIC - **Writes:** `retail_gold` schema and tables
@@ -21,8 +21,8 @@ _COL = re.compile(r"^\s+(\w+) [^\n]*? COMMENT '((?:[^'\\]|\\.)*)',?$", re.M)
 
 
 def ddl(stmt):
-    """Run a CREATE ... IF NOT EXISTS statement, then re-apply its table comment and any changed column comments,
-    so existing objects stay in sync with the descriptions in this DDL."""
+    """Run a CREATE ... IF NOT EXISTS statement, then re-apply its table comment, clustering keys and any changed
+    column comments, so existing objects stay in sync with this DDL."""
     run(stmt)
     m = re.search(r"CREATE (TABLE|SCHEMA) IF NOT EXISTS (\S+)", stmt)
     if not m:
@@ -38,6 +38,11 @@ def ddl(stmt):
     c = re.search(r"\n\)\s*COMMENT '((?:[^'\\]|\\.)*)'", stmt)
     if c:
         spark.sql(f"COMMENT ON TABLE {name} IS '{c.group(1)}'")
+    k = re.search(r"\nCLUSTER BY \(([^)]*)\)", stmt)
+    if k:
+        want = [c.strip() for c in k.group(1).split(",")]
+        if spark.sql(f"DESCRIBE DETAIL {name}").first().clusteringColumns != want:
+            spark.sql(f"ALTER TABLE {name} CLUSTER BY ({', '.join(want)})")
     current = {f.name: f.metadata.get("comment", "") for f in spark.table(name).schema}
     for col, cm in _COL.findall(stmt.split("\n)")[0]):
         if col in current and current[col] != cm.replace("\\'", "'").replace("\\\\", "\\"):
@@ -52,7 +57,7 @@ def ddl(stmt):
 
 ddl(r"""
 CREATE SCHEMA IF NOT EXISTS ${catalog}.${gold}
-COMMENT 'StrideForge CDP demo - GOLD: Customer 360, predictive scores, audiences, triggers, Customer Lake event tables and campaign measurement, built from retail_silver by job strideforge_medallion (gold_* tasks). Tables with cdp_activation = true are the activation contract.'
+COMMENT 'StrideForge CDP demo - GOLD: Customer 360, predictive scores, product feed, journey triggers and the Customer Lake household, purchase line item and event tables, built from retail_silver by job strideforge_medallion (gold_* tasks). Tables with cdp_activation = true are read by Customer Lake.'
 """)
 # COMMAND ----------
 
@@ -99,6 +104,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_profile (
   updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
   CONSTRAINT pk_customer_profile PRIMARY KEY (unified_customer_id)
 ) COMMENT 'CDP activation: Customer 360 profile - one row per unified customer (1.53M) with contact details, primary address, household, home/nearest store, loyalty tier and balance, fit profile, app/run-app flags and per-channel contactability. Customer Lake profile table for entity "Retail - StrideForge Customer". Derived from silver customers, customer_addresses, households, loyalty_members, customer_fit_profile, identity_graph and gold customer_consent. Built by job strideforge_medallion, task gold_customer_360 (notebook gold/01_customer_360).'
+CLUSTER BY (unified_customer_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -117,6 +123,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_identity_map (
   last_seen_at TIMESTAMP COMMENT 'Last time the identifier was seen in its source.',
   updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.'
 ) COMMENT 'CDP activation: all activation identifiers per customer - normalized and SHA-256 hashed email/phone, mobile ad ids, device ids, cookies, push tokens, loyalty ids/cards and source ids. Derived from silver identity_graph. Built by job strideforge_medallion, task gold_customer_360 (notebook gold/01_customer_360).'
+CLUSTER BY (unified_customer_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -140,6 +147,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_consent (
   updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
   CONSTRAINT pk_customer_consent PRIMARY KEY (unified_customer_id)
 ) COMMENT 'CDP activation: contactability gate per customer - email/SMS/push marketing, paid media targeting, profiling, do-not-sell and global suppression (repeated bounces / complaints). Derived from silver consent (GDPR/UK-GDPR require explicit opt-in for paid media/profiling; US/CA default allowed unless do-not-sell) and message_events. Built by job strideforge_medallion, task gold_customer_360 (notebook gold/01_customer_360).'
+CLUSTER BY (unified_customer_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -196,6 +204,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_traits (
   goal_race_distance_km DOUBLE COMMENT 'Distance (km) of the goal race (21.1 or 42.2).',
   CONSTRAINT pk_customer_traits PRIMARY KEY (unified_customer_id)
 ) COMMENT 'CDP activation: behavioural traits per customer - order history (USD), RFM scores and segment, lifecycle stage, preferred channel/store, category and sport affinity maps, discount sensitivity, returns, gifting, digital and email engagement, run miles, upcoming and goal race, run club, NPS, tickets, reviews. Derived from silver orders, order_lines, returns, sessions, message_events, fitness_activities, event_registrations, run_club_attendance, surveys, service_tickets and product_reviews (as of the latest order date). Built by job strideforge_medallion, task gold_customer_360 (notebook gold/01_customer_360).'
+CLUSTER BY (unified_customer_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -229,6 +238,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_predictions (
   scored_at TIMESTAMP COMMENT 'When the scores were computed.',
   CONSTRAINT pk_customer_predictions PRIMARY KEY (unified_customer_id)
 ) COMMENT 'CDP activation: predictive scores per customer - 12-month CLV and tier, churn probability and band, next best category/style, 30-day purchase propensity, predicted shoe replacement date, active shoe miles, drop hype, reseller risk, return risk, best send hour/day, category propensities. model_version heuristic_v1 (transparent rules, not trained models). Derived from gold customer_traits and silver shoe_mileage, order_lines, sessions, message_events. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
+CLUSTER BY (unified_customer_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -250,6 +260,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_product_recommendations (
   model_version STRING COMMENT 'Version of the scoring logic that produced the row (heuristic_v1 = transparent rules, not a trained model).',
   generated_at TIMESTAMP COMMENT 'When the recommendations were generated.'
 ) COMMENT 'CDP activation: top-5 product recommendations per customer in their size, inventory-aware (replenish / back in stock / new arrival / cross-sell). Grain: unified_customer_id x rank. Derived from 90-day best sellers by category and gender (silver order_lines) for the customer"s next best category, filtered to their shoe/apparel size via product_catalog_enriched, excluding styles already owned, boosted by back-in-stock signups. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
+CLUSTER BY (unified_customer_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -270,6 +281,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.trigger_events (
   status STRING COMMENT 'new (contactable) or suppressed (no consented channel).',
   expires_at TIMESTAMP COMMENT 'Trigger is stale after this time (trigger_ts + 7 days).'
 ) COMMENT 'CDP journey triggers as of the latest data day: cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, lapse risk; status suppressed when not contactable. Derived from silver carts, sessions, web_app_events, shoe_mileage, returns and gold product_catalog_enriched, customer_profile, customer_traits/predictions. Built by job strideforge_medallion, task gold_triggers (notebook gold/03_triggers).'
+CLUSTER BY (unified_customer_id, trigger_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -305,6 +317,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.product_catalog_enriched (
   updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
   CONSTRAINT pk_product_catalog_enriched PRIMARY KEY (sku)
 ) COMMENT 'CDP activation: SKU product feed for personalization (all SKUs, including discontinued ones) - current price and markdown, online/store availability and stock status, rating and fit feedback, new-arrival and drop flags, image and product URL. Derived from silver skus, products, price_history, inventory_daily and product_reviews. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
+CLUSTER BY (sku)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -328,6 +341,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.identity_resolution_stats (
   probabilistic_matches BIGINT COMMENT 'Accepted probabilistic match edges.',
   match_rate_by_source MAP<STRING,DOUBLE> COMMENT 'Per source system, share of its records that merged with at least one other record.'
 ) COMMENT 'Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer, multi-source share, deterministic/probabilistic matches, match rate by source. Derived from silver customer_source_records, customers, identity_graph, identity_match_pairs and web_app_events. Built by job strideforge_medallion, task gold_customer_360 (notebook gold/01_customer_360).'
+CLUSTER BY (run_ts)
 """)
 # COMMAND ----------
 
@@ -377,6 +391,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.household_profile (
   updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
   CONSTRAINT pk_household_profile PRIMARY KEY (household_id)
 ) COMMENT 'Customer Lake: Household profile - one row per household with member roll-ups (members, kids, contactability, revenue, CLV, churn, top sport, best tier). Joined many:1 from customer_profile on household_id. Derived from gold customer_profile, customer_traits, customer_predictions and silver households. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (household_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -413,6 +428,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.purchase_events (
   has_limited_drop BOOLEAN COMMENT 'Order contains a limited-drop style.',
   CONSTRAINT pk_purchase_events PRIMARY KEY (order_id)
 ) COMMENT 'Customer Lake event table: identified orders (event id order_id, timestamp order_ts) with USD revenue, channel, promo, UTMs and what was bought (categories, sports, styles, running shoes, CloudStride 3, limited drop). Derived from silver orders + order_lines + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, order_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -432,6 +448,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.purchase_line_items (
   revenue_usd DECIMAL(14,2) COMMENT 'Net line revenue after discount (USD).',
   CONSTRAINT pk_purchase_line_items PRIMARY KEY (order_line_id)
 ) COMMENT 'Customer Lake: purchase line items - one row per order line of an identified order, with the SKU and USD amounts. Related 1:many from purchase_events on order_id, and many:1 to product_catalog_enriched on sku. Derived from silver order_lines + orders. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (order_id)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -459,6 +476,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.return_events (
   quantity INT COMMENT 'Units returned.',
   CONSTRAINT pk_return_events PRIMARY KEY (return_id)
 ) COMMENT 'Customer Lake event table: identified returns (event id return_id, timestamp return_ts) with style, category, reason and fit flag. Derived from silver returns + skus + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, return_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -487,6 +505,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.digital_events (
   device_type STRING COMMENT 'Device: mobile/desktop/tablet on web, ios/android in the app.',
   CONSTRAINT pk_digital_events PRIMARY KEY (event_id)
 ) COMMENT 'Customer Lake event table: identified web/app events (event id event_id, timestamp event_ts). Derived from silver web_app_events. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, event_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -511,6 +530,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.message_engagement_events (
   device_type STRING COMMENT 'Device: mobile/desktop/tablet on web, ios/android in the app.',
   CONSTRAINT pk_message_engagement_events PRIMARY KEY (message_event_id)
 ) COMMENT 'Customer Lake event table: email/SMS/push sends and engagement (event id message_event_id, timestamp event_ts) with campaign name and objective. Derived from silver message_events + campaigns. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, event_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -535,6 +555,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.run_activity_events (
   shoe_total_miles DOUBLE COMMENT 'Total miles on that shoe to date.',
   CONSTRAINT pk_run_activity_events PRIMARY KEY (activity_id)
 ) COMMENT 'Customer Lake event table: run-app activities (event id activity_id, timestamp start_ts) with shoe and its total mileage. Derived from silver fitness_activities + shoe_mileage. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, start_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -555,6 +576,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.loyalty_events (
   reference_type STRING COMMENT 'order, return, promotion, inactivity or tier.',
   CONSTRAINT pk_loyalty_events PRIMARY KEY (ledger_id)
 ) COMMENT 'Customer Lake event table: loyalty ledger activity (event id ledger_id, timestamp activity_ts). Derived from silver loyalty_transactions. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, activity_ts)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -577,6 +599,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.race_registration_events (
   registration_source STRING COMMENT 'RaceRoster, Active.com, RunSignup or StrideForge App.',
   CONSTRAINT pk_race_registration_events PRIMARY KEY (registration_id)
 ) COMMENT 'Customer Lake event table: race registrations (event id registration_id, timestamp registered_at) with race date, type and distance. Derived from silver event_registrations. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, registered_at)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -599,6 +622,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.support_events (
   order_id STRING COMMENT 'Related order, when referenced.',
   CONSTRAINT pk_support_events PRIMARY KEY (ticket_id)
 ) COMMENT 'Customer Lake event table: service tickets (event id ticket_id, timestamp created_at) with category, status, sentiment. Derived from silver service_tickets. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, created_at)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -624,6 +648,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.review_events (
   verified_purchase BOOLEAN COMMENT 'Reviewer bought the product.',
   CONSTRAINT pk_review_events PRIMARY KEY (review_id)
 ) COMMENT 'Customer Lake event table: product reviews (event id review_id, timestamp submitted_at) with rating and AI fit/sentiment. Derived from silver product_reviews + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+CLUSTER BY (unified_customer_id, submitted_at)
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
