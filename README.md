@@ -13,7 +13,7 @@ Databricks Asset Bundle, so it can be deployed to any workspace.
 |---|---|---|
 | Bronze | `retail_bronze` | 42 raw tables, as they would arrive from each system (stores, website, app, loyalty, email, ads, support, …) |
 | Silver | `retail_silver` | 37 cleaned tables, with every record linked to one customer id |
-| Gold | `retail_gold` | 28 ready-to-use tables: the customer view, scores, journey triggers, Customer Lake event tables and campaign results |
+| Gold | `retail_gold` | 20 ready-to-use tables: the customer view, scores, product feed, journey triggers and the Customer Lake event tables |
 
 `retail_synthetic_truth` holds the generator's "answer key" (which records really belong to whom), used to check
 identity-resolution accuracy. Every gold table and column has a description in Unity Catalog.
@@ -45,11 +45,10 @@ Two jobs. Every step is a notebook with a short "what it does / reads / writes" 
 | `silver_commerce`, `silver_behavior`, `silver_loyalty_sport` | Orders and returns, web/app activity, loyalty and running – all linked to customers |
 | `silver_marketing`, `silver_service`, `silver_ai_review_enrichment` | Campaigns and messages; support, surveys and reviews (AI tags on the newest 20K reviews) |
 | `silver_customer_enrichment` | Addresses, households, shoe/apparel sizes, consent |
-| `gold_customer_360` | One row per customer: profile, consent, identifiers, behaviour |
+| `gold_customer_360` | One row per customer: profile, consent, identifiers, behaviour; identity-resolution stats |
 | `gold_predictions_products` | Simple rule-based scores, top-5 product picks, product feed |
-| `gold_audiences` | Journey triggers (abandoned cart, worn-out shoes, rain on trail runners ...) and the drop calendar |
-| `gold_measurement` | Campaign credit, campaign results, holdout lift, cohort and KPI tables |
-| `gold_customer_lake` | Household table and 9 event tables for Customer Lake |
+| `gold_triggers` | Journey triggers (abandoned cart, worn-out shoes, rain on trail runners ...) |
+| `gold_customer_lake` | Household table, purchase line items and 9 event tables for Customer Lake |
 
 ## Customer Lake
 
@@ -57,9 +56,9 @@ Point one entity at the gold tables:
 
 | Entity | Profile table (key) | Joined tables |
 |---|---|---|
-| Retail - StrideForge Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_predictions`; many:1 `household_profile`; 1:many `customer_product_recommendations`, `customer_identity_map`; 9 event tables (`purchase_events`, `return_events`, `digital_events`, `message_engagement_events`, `run_activity_events`, `loyalty_events`, `race_registration_events`, `support_events`, `review_events`) |
+| Retail - StrideForge Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_predictions`; many:1 `household_profile`; 1:many `customer_product_recommendations`, `customer_identity_map`; 9 event tables (`purchase_events`, `return_events`, `digital_events`, `message_engagement_events`, `run_activity_events`, `loyalty_events`, `race_registration_events`, `support_events`, `review_events`); `purchase_line_items` (1:many from `purchase_events`); `product_catalog_enriched` (many:1 on `sku`) |
 
-Audiences are built in Customer Lake, not in gold. Exact wizard settings, suggested attributes and 13 example audiences: [docs/customer_lake_setup.md](docs/customer_lake_setup.md).
+Audiences are built in Customer Lake, not in gold. Campaign results (opens, clicks, conversions) are measured from the event tables. Exact wizard settings, suggested attributes and example audiences: [docs/customer_lake_setup.md](docs/customer_lake_setup.md).
 
 ## Gold data model
 

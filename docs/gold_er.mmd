@@ -2,94 +2,108 @@ erDiagram
   customer_profile ||--|| customer_consent : "contactability gate"
   customer_profile ||--|| customer_traits : "behaviour"
   customer_profile ||--|| customer_predictions : "scores"
+  customer_profile }o--o| household_profile : "household_id"
   customer_profile ||--o{ customer_identity_map : "identifiers"
   customer_profile ||--o{ customer_product_recommendations : "top-5"
-  customer_profile ||--o{ trigger_events : "triggers"
-  customer_profile ||--o{ customer_daily_snapshot : "history"
-  customer_profile ||--o{ campaign_attribution : "orders"
-  product_catalog_enriched ||--o{ customer_product_recommendations : "sku"
-  product_catalog_enriched ||--o{ trigger_events : "sku"
-  product_catalog_enriched ||--o{ product_affinity : "style_id"
-  customer_predictions }o--o| product_catalog_enriched : "next_best_style_id"
-  campaign_performance ||--o{ campaign_attribution : "campaign_id"
-  campaign_performance ||--o| campaign_holdout_results : "campaign_id"
-  campaign_performance ||--o{ trigger_events : "campaign_id"
+  customer_profile ||--o{ purchase_events : "orders"
+  customer_profile ||--o{ return_events : "returns"
+  customer_profile ||--o{ digital_events : "web / app"
+  customer_profile ||--o{ message_engagement_events : "email / sms / push"
+  customer_profile ||--o{ run_activity_events : "runs"
+  customer_profile ||--o{ loyalty_events : "points"
+  customer_profile ||--o{ race_registration_events : "races"
+  customer_profile ||--o{ support_events : "tickets"
+  customer_profile ||--o{ review_events : "reviews"
+  customer_profile ||--o{ trigger_events : "journey triggers"
+  purchase_events ||--|{ purchase_line_items : "order_id"
+  purchase_line_items }o--|| product_catalog_enriched : "sku"
+  customer_product_recommendations }o--|| product_catalog_enriched : "sku"
+  digital_events }o--o| product_catalog_enriched : "sku"
+  return_events }o--o| product_catalog_enriched : "sku"
+  review_events }o--o| product_catalog_enriched : "sku"
+  run_activity_events }o--o| product_catalog_enriched : "sku (shoe)"
+  trigger_events }o--o| product_catalog_enriched : "sku"
 
   customer_profile {
     string unified_customer_id PK
-    string email
+    string household_id FK
     string loyalty_tier
-    double shoe_size_us
     boolean email_contactable
-    boolean paid_media_eligible
   }
   customer_consent {
     string unified_customer_id PK
-    boolean email_marketing
-    boolean paid_media_targeting
-    boolean global_suppression
   }
   customer_traits {
     string unified_customer_id PK
-    string rfm_segment
     string lifecycle_stage
-    map sport_affinity
-    double run_miles_90d
   }
   customer_predictions {
     string unified_customer_id PK
-    decimal predicted_clv_12m
     double churn_probability
-    date predicted_shoe_replacement_date
-    string next_best_style_id FK
+  }
+  household_profile {
+    string household_id PK
+    int member_count
   }
   customer_identity_map {
     string unified_customer_id FK
     string id_type
-    string id_value
   }
   customer_product_recommendations {
     string unified_customer_id FK
     int rank
     string sku FK
   }
-  trigger_events {
-    string trigger_id PK
-    string unified_customer_id FK
-    string trigger_type
+  purchase_events {
+    string order_id PK
+    timestamp order_ts
+    decimal revenue_usd
+  }
+  purchase_line_items {
+    string order_line_id PK
+    string order_id FK
     string sku FK
-    string campaign_id FK
+    decimal revenue_usd
   }
   product_catalog_enriched {
     string sku PK
-    string style_id
+    string category
     string stock_status
   }
-  product_affinity {
-    string antecedent_style_id FK
-    string consequent_style_id FK
-    double lift
+  return_events {
+    string return_id PK
+    timestamp return_ts
   }
-  drop_calendar {
-    string drop_id PK
-    bigint eligible_customer_count
+  digital_events {
+    string event_id PK
+    timestamp event_ts
   }
-  customer_daily_snapshot {
-    date snapshot_date
-    string unified_customer_id FK
+  message_engagement_events {
+    string message_event_id PK
+    timestamp event_ts
   }
-  campaign_performance {
-    string campaign_id
-    date report_date
-    decimal attributed_revenue
+  run_activity_events {
+    string activity_id PK
+    timestamp start_ts
   }
-  campaign_attribution {
-    string order_id
-    string unified_customer_id FK
-    string campaign_id FK
-    string attribution_model
+  loyalty_events {
+    string ledger_id PK
+    timestamp activity_ts
   }
-  campaign_holdout_results {
-    string campaign_id FK
-    double incremental_lift_pct
+  race_registration_events {
+    string registration_id PK
+    timestamp registered_at
+  }
+  support_events {
+    string ticket_id PK
+    timestamp created_at
+  }
+  review_events {
+    string review_id PK
+    timestamp submitted_at
+  }
+  trigger_events {
+    string trigger_id PK
+    timestamp trigger_ts
+    string trigger_type
   }

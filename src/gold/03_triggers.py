@@ -1,12 +1,12 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Gold 03 - Journey triggers and drop calendar
+# MAGIC # Gold 03 - Journey triggers
 # MAGIC
-# MAGIC **What it does:** Finds today's journey triggers (abandoned cart, worn-out shoes, rain on trail runners ...) and lists upcoming limited drops with the size of the eligible audience. Audiences themselves are built in Customer Lake.
+# MAGIC **What it does:** Finds today's journey triggers (abandoned cart, worn-out shoes, rain on trail runners ...). Audiences themselves are built in Customer Lake.
 # MAGIC
 # MAGIC - **Reads:** gold Customer 360, scores and product feed; silver carts, sessions, returns, shoe mileage, weather
-# MAGIC - **Writes:** `trigger_events`, `drop_calendar`
-# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_audiences`
+# MAGIC - **Writes:** `trigger_events`
+# MAGIC - **Runs in:** `strideforge_medallion` -> `gold_triggers`
 # MAGIC
 # MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------
@@ -52,7 +52,7 @@ t AS (
          'TRG-BACK-IN-STOCK'
   FROM (SELECT DISTINCT unified_customer_id, sku FROM {S}.web_app_events WHERE event_type = 'back_in_stock_signup'
         AND unified_customer_id IS NOT NULL) e
-  JOIN {G}.product_catalog_enriched f ON f.sku = e.sku AND f.stock_status <> 'out_of_stock'
+  JOIN {G}.product_catalog_enriched f ON f.sku = e.sku AND f.stock_status IN ('in_stock', 'low_stock')
   UNION ALL
   SELECT unified_customer_id, 'shoe_mileage_threshold', last_activity_at, map('shoe_registration_id', shoe_registration_id,
          'miles', CAST(total_miles AS STRING)), sku, 'TRG-MILEAGE-REPLACE'
@@ -86,13 +86,4 @@ SELECT concat('TG', upper(substr(sha2(concat_ws('|', unified_customer_id, trigge
 FROM t JOIN {G}.customer_profile p USING (unified_customer_id)""")
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Step 3 - Drop calendar with the eligible audience size (sneakerheads)
-# COMMAND ----------
-
-sql(f"""INSERT OVERWRITE {G}.drop_calendar BY NAME
-SELECT d.drop_id, d.style_id, d.drop_name, d.release_ts, d.units_available, 'Sneakerheads' AS eligible_segment_id,
-       (SELECT count(*) FROM seg_base WHERE drop_hype_score >= 0.5 AND reseller_risk_score < 0.5) AS eligible_customer_count,
-       CASE WHEN d.member_early_access THEN d.release_ts - INTERVAL 1 DAY END AS early_access_start_ts, d.is_raffle
-FROM {S}.product_drops d""")
-print("triggers:", spark.table(f"{G}.trigger_events").count(), " drops:", spark.table(f"{G}.drop_calendar").count(), flush=True)
+print("triggers:", spark.table(f"{G}.trigger_events").count(), flush=True)

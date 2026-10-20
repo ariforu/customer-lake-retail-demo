@@ -2,10 +2,10 @@
 # MAGIC %md
 # MAGIC # Gold 01 - Customer 360
 # MAGIC
-# MAGIC **What it does:** Builds the one-row-per-customer view the CDP uses: who they are, whether we may contact them, all their identifiers, and what they have done.
+# MAGIC **What it does:** Builds the one-row-per-customer view the CDP uses: who they are, whether we may contact them, all their identifiers, and what they have done. Also records identity-resolution statistics for the run.
 # MAGIC
-# MAGIC - **Reads:** silver customers, consent, orders, events, loyalty, sport and service tables
-# MAGIC - **Writes:** `customer_consent`, `customer_profile`, `customer_identity_map`, `customer_traits`
+# MAGIC - **Reads:** silver customers, consent, orders, events, loyalty, sport and service tables; identity graph and match pairs
+# MAGIC - **Writes:** `customer_consent`, `customer_profile`, `customer_identity_map`, `customer_traits`, `identity_resolution_stats`
 # MAGIC - **Runs in:** `strideforge_medallion` -> `gold_customer_360`
 # MAGIC
 # MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
@@ -250,4 +250,28 @@ SELECT sc.unified_customer_id, sc.first_order_date, sc.last_order_date, sc.dsl A
 FROM sc LEFT JOIN t_lines tl USING (unified_customer_id) LEFT JOIN dig USING (unified_customer_id) LEFT JOIN em USING (unified_customer_id)
 LEFT JOIN run USING (unified_customer_id) LEFT JOIN race USING (unified_customer_id) LEFT JOIN club USING (unified_customer_id)
 LEFT JOIN nps USING (unified_customer_id) LEFT JOIN tk USING (unified_customer_id) LEFT JOIN rv USING (unified_customer_id)
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 10 - Identity resolution summary (appended each run)
+# COMMAND ----------
+
+run(r"""
+INSERT INTO ${catalog}.${gold}.identity_resolution_stats BY NAME
+WITH r AS (SELECT DISTINCT source_record_key, source_system, unified_customer_id FROM ${catalog}.${silver}.identity_graph),
+cs AS (SELECT unified_customer_id, count(*) AS n FROM r GROUP BY 1),
+src AS (SELECT r.source_system, avg(CASE WHEN cs.n > 1 THEN 1.0 ELSE 0 END) AS m FROM r JOIN cs USING (unified_customer_id) GROUP BY 1)
+SELECT current_timestamp() AS run_ts,
+       (SELECT count(*) FROM ${catalog}.${silver}.customer_source_records) AS source_records,
+       (SELECT count(*) FROM ${catalog}.${silver}.customers) AS unified_customers,
+       (SELECT count(*) FROM ${catalog}.${silver}.customers WHERE is_known) AS known_customers,
+       (SELECT count(DISTINCT anonymous_id) FROM ${catalog}.${silver}.web_app_events WHERE unified_customer_id IS NULL) AS anonymous_profiles,
+       (SELECT count(*) FROM ${catalog}.${silver}.customer_source_records) - (SELECT count(*) FROM ${catalog}.${silver}.customers) AS duplicates_collapsed,
+       round(1 - (SELECT count(*) FROM ${catalog}.${silver}.customers) / (SELECT count(*) FROM ${catalog}.${silver}.customer_source_records), 4) AS dedup_rate,
+       round((SELECT count(*) FROM ${catalog}.${silver}.identity_graph) / (SELECT count(*) FROM ${catalog}.${silver}.customers), 2) AS avg_ids_per_customer,
+       (SELECT round(avg(CASE WHEN n > 1 THEN 1.0 ELSE 0 END), 4) FROM cs) AS multi_source_customer_pct,
+       (SELECT count(*) FROM ${catalog}.${silver}.identity_match_pairs WHERE match_type = 'deterministic') AS deterministic_matches,
+       (SELECT count(*) FROM ${catalog}.${silver}.identity_match_pairs WHERE match_type = 'probabilistic') AS probabilistic_matches,
+       (SELECT map_from_entries(collect_list(struct(source_system, round(m, 4)))) FROM src) AS match_rate_by_source
 """)

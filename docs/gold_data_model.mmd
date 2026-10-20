@@ -1,56 +1,39 @@
 flowchart LR
-  classDef cdp fill:#E8F1FB,stroke:#1F6FB2,stroke-width:1.5px,color:#0B2E4F
   classDef core fill:#1F6FB2,stroke:#0B2E4F,stroke-width:2px,color:#FFFFFF
+  classDef cdp fill:#E8F1FB,stroke:#1F6FB2,stroke-width:1.5px,color:#0B2E4F
+  classDef evt fill:#EAF7EF,stroke:#1E8E4E,stroke-width:1.5px,color:#0E3B22
   classDef ana fill:#F4F4F4,stroke:#8A8A8A,stroke-width:1px,color:#333333
   classDef ext fill:#FFF6E5,stroke:#C98A00,stroke-width:1px,color:#5A3E00
 
-  subgraph ACT["CDP activation contract  (cdp_activation = true)"]
+  subgraph CL["Used by Customer Lake  -  entity: Retail - StrideForge Customer"]
     direction LR
-    subgraph C360["Customer 360  -  1 row per unified_customer_id"]
-      direction TB
-      PROFILE["customer_profile<br/><i>who: PII, address, fit, loyalty, contactability</i>"]:::core
-      CONSENT["customer_consent<br/><i>may we contact them</i>"]:::cdp
-      TRAITS["customer_traits<br/><i>what they did: RFM, affinities, run miles</i>"]:::cdp
-      PRED["customer_predictions<br/><i>what they'll do: CLV, churn, replacement date</i>"]:::cdp
-    end
-    IDMAP["customer_identity_map<br/><i>email/phone hashes, MAIDs, cookies, push tokens</i>"]:::cdp
-    RECS["customer_product_recommendations<br/><i>top-5 in size & in stock</i>"]:::cdp
-    CATALOG["product_catalog_enriched<br/><i>SKU feed: price, stock, rating</i>"]:::cdp
-    TRIG["trigger_events<br/><i>real-time journey triggers</i>"]:::cdp
+    PROFILE["<b>customer_profile</b><br/><i>profile table, key unified_customer_id</i>"]:::core
+    ONE["<b>1 : 1</b><br/>customer_consent<br/>customer_traits<br/>customer_predictions"]:::cdp
+    HH["<b>many : 1</b><br/>household_profile"]:::cdp
+    MANY["<b>1 : many</b><br/>customer_identity_map<br/>customer_product_recommendations"]:::cdp
+    EV["<b>Event tables</b>  (event id + timestamp)<br/>purchase_events · return_events<br/>digital_events · message_engagement_events<br/>run_activity_events · loyalty_events<br/>race_registration_events · support_events<br/>review_events"]:::evt
+    LINES["<b>purchase_line_items</b><br/><i>1 : many from purchase_events</i>"]:::cdp
+    CATALOG["<b>product_catalog_enriched</b><br/><i>many : 1 on sku</i>"]:::cdp
+
+    PROFILE --- ONE
+    PROFILE --> HH
+    PROFILE --> MANY
+    PROFILE --> EV
+    EV -->|"order_id"| LINES
+    LINES -->|"sku"| CATALOG
+    EV -.->|"sku (digital, return, review, run)"| CATALOG
+    MANY -.->|"sku (recommendations)"| CATALOG
   end
 
-  subgraph ANA["Analytics & measurement"]
+  subgraph OTHER["Other gold"]
     direction TB
-    SNAP["customer_daily_snapshot"]:::ana
-    AFF["product_affinity"]:::ana
-    DROPS["drop_calendar"]:::ana
-    ATTR["campaign_attribution"]:::ana
-    PERF["campaign_performance"]:::ana
-    HOLD["campaign_holdout_results"]:::ana
-    COH["cohort_retention"]:::ana
-    KPI["channel_kpis_daily / store_kpis_daily"]:::ana
-    IRS["identity_resolution_stats"]:::ana
+    TRIG["trigger_events<br/><i>journey triggers</i>"]:::ana
+    IRS["identity_resolution_stats<br/><i>identity-resolution proof</i>"]:::ana
   end
 
-  CL(["Customer Lake<br/>audiences & connectors"]):::ext
-  DEST(["ESP / SMS / Push<br/>Meta / Google / TikTok"]):::ext
+  LAKE(["<b>Customer Lake</b><br/>attributes · audiences · syncs"]):::ext
+  DEST(["Braze · SFMC · Meta · Google ..."]):::ext
 
-  PROFILE ---|"1 : 1"| CONSENT
-  PROFILE ---|"1 : 1"| TRAITS
-  PROFILE ---|"1 : 1"| PRED
-  PROFILE -->|"1 : N  unified_customer_id"| IDMAP
-  PROFILE -->|"1 : N"| RECS
-  PROFILE -->|"1 : N"| TRIG
-  PROFILE -->|"1 : N"| SNAP
-  PROFILE -->|"1 : N"| ATTR
-  CATALOG -->|"sku"| RECS
-  CATALOG -->|"sku"| TRIG
-  PRED -.->|"next_best_style_id"| CATALOG
-  C360 ==>|"entity + attributes"| CL
-  CONSENT -.->|"gates every send / sync"| CL
-  CL ==> DEST
-  TRIG ==> DEST
-  CATALOG -.->|"style_id"| AFF
-  ATTR -->|"campaign_id"| PERF
-  PERF --- HOLD
-  DEST -.->|"engagement write-back -> bronze"| PERF
+  CL ==> LAKE
+  LAKE ==>|"syncs"| DEST
+  DEST -.->|"opens, clicks, purchases flow back into bronze, then the event tables"| EV

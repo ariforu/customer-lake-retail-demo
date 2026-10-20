@@ -6,7 +6,8 @@ Reference: [Set up entities](https://docs.databricks.com/aws/en/custmrlke/campai
 [Create audiences](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/create-audiences).
 
 All objects live in `customer_lake_si.retail_gold` (replace with your catalog/schema if deployed elsewhere).
-They are refreshed by the `strideforge_medallion` job (`gold_customer_lake` task).
+They are plain Delta tables, refreshed by the `strideforge_medallion` job (`gold_customer_lake` task).
+Every table has a primary key and a description on each column.
 
 ## 0. Prerequisites
 - Grant Customer Lake access to the data ([Grant access to your data](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/set-up/configure-workspace#grant-data-access)):
@@ -34,6 +35,7 @@ They are refreshed by the `strideforge_medallion` job (`gold_customer_lake` task
 | `customer_product_recommendations` | 1:many | aggregate with `List` (e.g. top SKUs) |
 | `customer_identity_map` | 1:many | aggregate with `Count Distinct` / `List` on `id_type` |
 | `purchase_events` | **event table** | event ID `order_id`, timestamp `order_ts` |
+| `purchase_line_items` | 1:many **from `purchase_events`** | join `order_id = order_id` (one row per order line, with `sku`) |
 | `return_events` | **event table** | event ID `return_id`, timestamp `return_ts` |
 | `digital_events` | **event table** | event ID `event_id`, timestamp `event_ts` |
 | `message_engagement_events` | **event table** | event ID `message_event_id`, timestamp `event_ts` |
@@ -42,6 +44,12 @@ They are refreshed by the `strideforge_medallion` job (`gold_customer_lake` task
 | `race_registration_events` | **event table** | event ID `registration_id`, timestamp `registered_at` |
 | `support_events` | **event table** | event ID `ticket_id`, timestamp `created_at` |
 | `review_events` | **event table** | event ID `review_id`, timestamp `submitted_at` |
+
+**Product data.** `product_catalog_enriched` (key `sku`) is not keyed by customer, so relate it to the tables that
+carry a `sku`, each as **many:1** on `sku = sku`:
+`purchase_line_items`, `customer_product_recommendations`, `digital_events`, `return_events`, `review_events`,
+`run_activity_events` (the shoe used). This makes product fields such as `category`, `sport`, `current_price`,
+`is_on_markdown`, `stock_status`, `is_new_arrival` and `is_limited_drop` usable in attributes and event filters.
 
 ### Recommended Customer attributes
 - **Column attributes (bulk-create)** from `customer_profile`, `customer_consent`, `customer_traits`, `customer_predictions`:
@@ -62,6 +70,8 @@ They are refreshed by the `strideforge_medallion` job (`gold_customer_lake` task
   `digital_events.event_type`, `.category`, `.sku`; `message_engagement_events.event_type`, `.channel`, `.campaign_id`;
   `run_activity_events.activity_type`, `.distance_miles`; `race_registration_events.event_type`, `.event_date`;
   `support_events.category`; `review_events.rating`, `.ai_fit_feedback`.
+- **Product attributes** (through the `sku` joins): `product_catalog_enriched.category`, `.sport`, `.style_name`,
+  `.current_price`, `.is_on_markdown`, `.stock_status`, `.is_new_arrival`, `.is_limited_drop`, `.fit_feedback`.
 
 ## 2. Entity: Household
 
@@ -93,8 +103,15 @@ Column attributes: `member_count`, `has_kids`, `kids_age_bands`, `household_reve
 | Close to Elite | Customer | `loyalty_tier = Pro` AND `revenue_12m between 800 and 999` |
 | Lookalike seed | Customer | `predicted_clv_12m` in top 5% AND `paid_media_eligible` |
 | Recent purchasers (suppress) | Customer | event `purchase_events` in last 14 days (use as a blocklist on prospecting syncs) |
+| Bought trail shoes recently | Customer | event `purchase_events` in last 30 days where line item product `category = Trail` |
+| Viewed a limited drop | Customer | event `digital_events` `event_type = product_view` in last 7 days where product `is_limited_drop = true` |
+| Recommended item on markdown | Customer | `customer_product_recommendations` product `is_on_markdown = true` AND `stock_status = in_stock` |
 | Email fatigued | Customer | `email_contactable` AND `Email Opens (30d) = 0` |
-| Trail runners + rain | Customer | `top_sport = Trail Running` (forecast condition stays in `gold.trigger_events`) |
+| Trail runners + rain | Customer | `top_sport = Trail Running` (the rain-forecast condition is in `gold.trigger_events`) |
 
 Connector rules: block `global_suppression = true` everywhere, `do_not_sell = true` / `paid_media_eligible = false`
 on ad platforms, and *Reseller suspects* on drop-related syncs.
+
+Filtering purchases on line-item product fields relies on event filters reaching through `purchase_events` →
+`purchase_line_items` → `product_catalog_enriched`. If the audience builder does not offer those fields, use the
+product arrays on `purchase_events` (`categories`, `sports`, `style_names`) instead.

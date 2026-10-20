@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Create gold tables
 # MAGIC
-# MAGIC **What it does:** Creates the gold schema and its 18 core tables with a description on every table and column. Safe to re-run: it only refreshes descriptions on existing tables.
+# MAGIC **What it does:** Creates the gold schema and its 20 tables with a description on every table and column. Safe to re-run: it only refreshes descriptions on existing tables.
 # MAGIC
 # MAGIC - **Reads:** -
 # MAGIC - **Writes:** `retail_gold` schema and tables
@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.trigger_events (
   campaign_id STRING COMMENT 'Journey / triggered campaign to start (TRG-...).',
   status STRING COMMENT 'new (contactable) or suppressed (no consented channel).',
   expires_at TIMESTAMP COMMENT 'Trigger is stale after this time (trigger_ts + 7 days).'
-) COMMENT 'CDP journey triggers as of the latest data day: cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, lapse risk; status suppressed when not contactable. Derived from silver carts, sessions, web_app_events, shoe_mileage, returns and gold product_catalog_enriched, customer_profile, customer_traits/predictions. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
+) COMMENT 'CDP journey triggers as of the latest data day: cart / browse abandonment, back in stock in size, shoe mileage threshold, race training start, heavy-rain trail, tier upgrade, fit return, lapse risk; status suppressed when not contactable. Derived from silver carts, sessions, web_app_events, shoe_mileage, returns and gold product_catalog_enriched, customer_profile, customer_traits/predictions. Built by job strideforge_medallion, task gold_triggers (notebook gold/03_triggers).'
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
@@ -294,7 +294,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.product_catalog_enriched (
   is_on_markdown BOOLEAN COMMENT 'A markdown or promo price is in effect.',
   available_qty_online INT COMMENT 'Available units across distribution centres (latest daily snapshot).',
   available_qty_stores INT COMMENT 'Available units across stores (current snapshot).',
-  stock_status STRING COMMENT 'in_stock, low_stock (<10 online) or out_of_stock.',
+  stock_status STRING COMMENT 'in_stock, low_stock (<10 online), out_of_stock, or discontinued (kept so past purchases, returns and reviews still join).',
   avg_rating DOUBLE COMMENT 'Average review rating of the style.',
   review_count INT COMMENT 'Number of reviews of the style.',
   fit_feedback STRING COMMENT 'Most common fit feedback in reviews (runs_small, true_to_size, runs_large).',
@@ -304,205 +304,13 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.product_catalog_enriched (
   product_url STRING COMMENT 'Product detail page URL for the SKU.',
   updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
   CONSTRAINT pk_product_catalog_enriched PRIMARY KEY (sku)
-) COMMENT 'CDP activation: SKU product feed for personalization - current price and markdown, online/store availability and stock status, rating and fit feedback, new-arrival and drop flags, image and product URL. Derived from silver skus, products, price_history, inventory_daily and product_reviews. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
+) COMMENT 'CDP activation: SKU product feed for personalization (all SKUs, including discontinued ones) - current price and markdown, online/store availability and stock status, rating and fit feedback, new-arrival and drop flags, image and product URL. Derived from silver skus, products, price_history, inventory_daily and product_reviews. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
 TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 10 - `customer_daily_snapshot` - Month-end customer snapshots for the last 6 months: lifecycle, RFM-style segment, tier, 12-month revenue/orders, churn and CLV as of each sn
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.customer_daily_snapshot (
-  snapshot_date DATE NOT NULL COMMENT 'Month-end date the customer state is reconstructed for (last 6 months).',
-  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
-  lifecycle_stage STRING COMMENT 'prospect (no linked purchase), new (first order <=90d), active, loyal (>=5 orders in 12m), at_risk (181-365d since last order), lapsed (>365d).',
-  rfm_segment STRING COMMENT 'Simplified segment at snapshot: champions (>=5 orders 12m), loyal (>=2), promising (1), hibernating (0).',
-  loyalty_tier STRING COMMENT 'Current loyalty tier (not reconstructed historically).',
-  revenue_12m DECIMAL(14,2) COMMENT 'Net merchandise revenue (subtotal - discount) in the last 12 months (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
-  order_count_12m INT COMMENT 'Number of orders in the last 12 months.',
-  churn_probability DOUBLE COMMENT 'Probability the customer does not purchase again (0-1); logistic score on recency, 12m frequency, fit returns and recent sessions (heuristic_v1).',
-  predicted_clv_12m DECIMAL(14,2) COMMENT 'Predicted 12-month customer lifetime value (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93) = revenue_12m x (1 - churn_probability) x 1.08 (heuristic_v1).',
-  email_contactable BOOLEAN COMMENT 'Current email contactability (not reconstructed historically).'
-) COMMENT 'Month-end customer snapshots for the last 6 months: lifecycle, RFM-style segment, tier, 12-month revenue/orders, churn and CLV as of each snapshot. Derived from silver orders and gold customer_profile. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 11 - `product_affinity` - Style-level basket affinity (support, confidence, lift) for cross-sell, pairs seen in >=30 multi-item orders
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.product_affinity (
-  antecedent_style_id STRING NOT NULL COMMENT 'Style bought first (if-part of the rule).',
-  consequent_style_id STRING NOT NULL COMMENT 'Style also bought in the same order (then-part).',
-  antecedent_category STRING COMMENT 'Category of the antecedent style.',
-  consequent_category STRING COMMENT 'Category of the consequent style.',
-  support DOUBLE COMMENT 'Share of multi-item orders containing both styles.',
-  confidence DOUBLE COMMENT 'P(consequent | antecedent) within multi-item orders.',
-  lift DOUBLE COMMENT 'confidence / P(consequent); >1 means bought together more than by chance.',
-  computed_at TIMESTAMP COMMENT 'When the rule was computed.'
-) COMMENT 'Style-level basket affinity (support, confidence, lift) for cross-sell, pairs seen in >=30 multi-item orders. Derived from silver order_lines. Built by job strideforge_medallion, task gold_predictions_products (notebook gold/02_predictions_products).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 12 - `drop_calendar` - Limited drops with the eligible audience (sneakerheads) and early-access window
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.drop_calendar (
-  drop_id STRING NOT NULL COMMENT 'Limited drop id (DRP...).',
-  style_id STRING COMMENT 'Product style id (e.g. RUN0123); joins to silver.products / product_catalog_enriched.style_id.',
-  drop_name STRING COMMENT 'Drop / collab style name.',
-  release_ts TIMESTAMP COMMENT 'Release date and time.',
-  units_available INT COMMENT 'Units allocated to the drop.',
-  eligible_segment_id STRING COMMENT 'Audience eligible for early access (Sneakerheads: drop_hype_score >= 0.5 and reseller_risk_score < 0.5).',
-  eligible_customer_count BIGINT COMMENT 'Current size of the eligible audience.',
-  early_access_start_ts TIMESTAMP COMMENT 'Member early-access start (release - 1 day) when enabled.',
-  is_raffle BOOLEAN COMMENT 'Drop is sold by raffle.'
-) COMMENT 'Limited drops with the eligible audience (sneakerheads) and early-access window. Derived from silver product_drops and gold customer_predictions. Built by job strideforge_medallion, task gold_audiences (notebook gold/03_audiences).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 13 - `campaign_performance` - Daily campaign KPIs per campaign and channel: audience, sends, delivered, opens, clicks, unsubscribes, impressions, spend, attributed conver
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_performance (
-  campaign_id STRING NOT NULL COMMENT 'Campaign id: EM-/SMS-/PUSH- owned campaigns, TRG- triggered flows, ME-/GO-/TI-/YO- paid campaigns (Meta/Google/TikTok/YouTube).',
-  campaign_name STRING COMMENT 'Campaign display name.',
-  segment_id STRING COMMENT 'Targeted audience (null when not linked).',
-  channel STRING COMMENT 'Channel of the record (web/app/store for commerce; email/sms/push for messaging; platform for paid).',
-  report_date DATE COMMENT 'Calendar date the metrics are reported for.',
-  audience_size BIGINT COMMENT 'Distinct customers sent that day.',
-  sends BIGINT COMMENT 'Messages sent.',
-  delivered BIGINT COMMENT 'Sends minus bounces.',
-  opens BIGINT COMMENT 'Distinct messages opened.',
-  clicks BIGINT COMMENT 'Distinct messages clicked (or ad clicks for paid).',
-  unsubscribes BIGINT COMMENT 'Unsubscribes attributed to the campaign.',
-  impressions BIGINT COMMENT 'Ad impressions (paid only).',
-  spend DECIMAL(14,2) COMMENT 'Paid media spend in the account currency.',
-  conversions BIGINT COMMENT 'Orders credited by last-touch attribution.',
-  attributed_revenue DECIMAL(14,2) COMMENT 'Last-touch attributed revenue (USD).',
-  attributed_margin DECIMAL(14,2) COMMENT 'Last-touch attributed gross margin.',
-  open_rate DOUBLE COMMENT 'opens / delivered.',
-  click_rate DOUBLE COMMENT 'clicks / delivered (owned) or clicks / impressions (paid).',
-  conversion_rate DOUBLE COMMENT 'conversions / delivered (owned) or conversions / clicks (paid).',
-  roas DOUBLE COMMENT 'attributed_revenue / spend (paid only).'
-) COMMENT 'Daily campaign KPIs per campaign and channel: audience, sends, delivered, opens, clicks, unsubscribes, impressions, spend, attributed conversions/revenue/margin, rates and ROAS. Derived from silver message_events, paid_media_performance, campaigns, order_lines and gold campaign_attribution. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 14 - `campaign_attribution` - Order-to-campaign attribution for the last 12 months: last-touch and linear models over clicks, UTM visits and paid touchpoints in a 7-day l
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_attribution (
-  order_id STRING NOT NULL COMMENT 'Order id: SF<country>... for e-commerce orders, TX... for store transactions.',
-  unified_customer_id STRING COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
-  order_ts TIMESTAMP COMMENT 'Order timestamp.',
-  order_revenue DECIMAL(12,2) COMMENT 'Order net revenue (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
-  campaign_id STRING COMMENT 'Campaign id: EM-/SMS-/PUSH- owned campaigns, TRG- triggered flows, ME-/GO-/TI-/YO- paid campaigns (Meta/Google/TikTok/YouTube).',
-  channel STRING COMMENT 'Channel of the credited touchpoint (email, sms, push, search, paid_social, platform...).',
-  touchpoint_ts TIMESTAMP COMMENT 'Time of the credited touchpoint (within 7 days before the order).',
-  attribution_model STRING COMMENT 'last_touch (100% to the last touch) or linear (equal split across touches).',
-  attribution_weight DOUBLE COMMENT 'Share of the order credited to this touchpoint.',
-  attributed_revenue DECIMAL(12,2) COMMENT 'order_revenue x attribution_weight.'
-) COMMENT 'Order-to-campaign attribution for the last 12 months: last-touch and linear models over clicks, UTM visits and paid touchpoints in a 7-day lookback, revenue in USD. Derived from silver orders and marketing_touchpoints. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 15 - `campaign_holdout_results` - Incrementality for the 20 largest batch email campaigns: recipients vs email-contactable customers not sent, 7-day conversion and revenue, l
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.campaign_holdout_results (
-  campaign_id STRING NOT NULL COMMENT 'Campaign id: EM-/SMS-/PUSH- owned campaigns, TRG- triggered flows, ME-/GO-/TI-/YO- paid campaigns (Meta/Google/TikTok/YouTube).',
-  segment_id STRING COMMENT 'Audience (null: all email-contactable customers).',
-  measurement_window_days INT COMMENT 'Days after send counted for conversion (7).',
-  test_customers BIGINT COMMENT 'Customers who received the campaign.',
-  control_customers BIGINT COMMENT 'Email-contactable customers who did not receive it.',
-  test_conversion_rate DOUBLE COMMENT 'Share of test customers ordering in the window.',
-  control_conversion_rate DOUBLE COMMENT 'Share of control customers ordering in the window.',
-  test_revenue_per_customer DECIMAL(12,2) COMMENT 'Revenue per test customer in the window (USD).',
-  control_revenue_per_customer DECIMAL(12,2) COMMENT 'Revenue per control customer (USD).',
-  incremental_lift_pct DOUBLE COMMENT '(test - control) / control conversion, in %.',
-  incremental_revenue DECIMAL(14,2) COMMENT '(test - control revenue per customer) x test customers.',
-  p_value DOUBLE COMMENT 'Approximate two-sided p-value of the conversion difference (two-proportion z-test).',
-  computed_at TIMESTAMP COMMENT 'When results were computed.'
-) COMMENT 'Incrementality for the 20 largest batch email campaigns: recipients vs email-contactable customers not sent, 7-day conversion and revenue, lift and approximate p-value. Derived from silver campaigns, message_events, orders and gold customer_profile. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 16 - `cohort_retention` - Acquisition cohort retention and cumulative revenue per customer by month since first order and acquisition channel (online/store)
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.cohort_retention (
-  cohort_month DATE NOT NULL COMMENT 'Month of the customer\'s first order.',
-  acquisition_channel STRING COMMENT 'Channel of the first order: online or store.',
-  months_since_acquisition INT COMMENT 'Months between first order and the activity month.',
-  cohort_size BIGINT COMMENT 'Customers acquired in the cohort.',
-  active_customers BIGINT COMMENT 'Cohort customers ordering in that month.',
-  retention_rate DOUBLE COMMENT 'active_customers / cohort_size.',
-  cumulative_revenue DECIMAL(14,2) COMMENT 'Cohort revenue to date (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
-  revenue_per_customer DECIMAL(12,2) COMMENT 'cumulative_revenue / cohort_size.'
-) COMMENT 'Acquisition cohort retention and cumulative revenue per customer by month since first order and acquisition channel (online/store). Derived from silver orders. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 17 - `channel_kpis_daily` - Daily KPIs per sales channel (web, app, store): sessions, orders, customers, new customers, revenue (USD), AOV, conversion, return and cart-
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.channel_kpis_daily (
-  report_date DATE NOT NULL COMMENT 'Calendar date the metrics are reported for.',
-  channel STRING COMMENT 'Sales channel: web, app or store.',
-  sessions BIGINT COMMENT 'Web/app sessions (analytics window only; null for store).',
-  orders BIGINT COMMENT 'Number of orders placed that day in the channel.',
-  customers BIGINT COMMENT 'Distinct identified customers ordering.',
-  new_customers BIGINT COMMENT 'Customers placing their first order that day.',
-  revenue DECIMAL(14,2) COMMENT 'Net revenue (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
-  aov DECIMAL(12,2) COMMENT 'Revenue / orders.',
-  conversion_rate DOUBLE COMMENT 'orders / sessions.',
-  return_rate DOUBLE COMMENT 'Returned lines / lines for orders placed that day.',
-  cart_abandonment_rate DOUBLE COMMENT 'Abandoned carts / carts created (web+app).'
-) COMMENT 'Daily KPIs per sales channel (web, app, store): sessions, orders, customers, new customers, revenue (USD), AOV, conversion, return and cart-abandonment rates. Derived from silver orders, sessions, order_lines, returns and carts. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 18 - `store_kpis_daily` - Daily KPIs per store: transactions, identified-customer share, revenue, units, AOV, returns, gait analyses, run-club check-ins, BOPIS pickup
-# COMMAND ----------
-
-ddl(r"""
-CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.store_kpis_daily (
-  report_date DATE NOT NULL COMMENT 'Calendar date the metrics are reported for.',
-  store_id STRING COMMENT 'Store id (ST....).',
-  region STRING COMMENT 'Store region (US-West, US-East, US-Central, US-South, UK & Ireland, DACH, Canada).',
-  transactions BIGINT COMMENT 'Store transactions.',
-  customers BIGINT COMMENT 'Distinct identified customers.',
-  identified_customer_pct DOUBLE COMMENT 'Share of transactions linked to a customer.',
-  revenue DECIMAL(14,2) COMMENT 'Net revenue (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
-  units BIGINT COMMENT 'Units sold.',
-  aov DECIMAL(12,2) COMMENT 'Revenue / transactions.',
-  returns BIGINT COMMENT 'Returns processed for store purchases.',
-  gait_analyses INT COMMENT 'Gait-lab scans performed.',
-  run_club_checkins INT COMMENT 'Run-club check-ins.',
-  bopis_orders BIGINT COMMENT 'Online orders picked up in store.'
-) COMMENT 'Daily KPIs per store: transactions, identified-customer share, revenue, units, AOV, returns, gait analyses, run-club check-ins, BOPIS pickups. Derived from silver orders, returns, run_club_attendance, stores and bronze gait_analysis_raw. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 19 - `identity_resolution_stats` - Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer,
+# MAGIC ### Step 10 - `identity_resolution_stats` - Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer,
 # COMMAND ----------
 
 ddl(r"""
@@ -519,7 +327,304 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.identity_resolution_stats (
   deterministic_matches BIGINT COMMENT 'Accepted deterministic match edges.',
   probabilistic_matches BIGINT COMMENT 'Accepted probabilistic match edges.',
   match_rate_by_source MAP<STRING,DOUBLE> COMMENT 'Per source system, share of its records that merged with at least one other record.'
-) COMMENT 'Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer, multi-source share, deterministic/probabilistic matches, match rate by source. Derived from silver customer_source_records, customers, identity_graph, identity_match_pairs and web_app_events. Built by job strideforge_medallion, task gold_measurement (notebook gold/04_measurement).'
+) COMMENT 'Identity resolution run statistics (appended per run): source records, unified customers, anonymous profiles, dedup rate, ids per customer, multi-source share, deterministic/probabilistic matches, match rate by source. Derived from silver customer_source_records, customers, identity_graph, identity_match_pairs and web_app_events. Built by job strideforge_medallion, task gold_customer_360 (notebook gold/01_customer_360).'
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Replace Customer Lake objects built by earlier versions (views, or tables without a primary key)
+# COMMAND ----------
+
+_CL = ["household_profile", "purchase_events", "purchase_line_items", "return_events", "digital_events",
+       "message_engagement_events", "run_activity_events", "loyalty_events", "race_registration_events",
+       "support_events", "review_events"]
+_info = f"{P['catalog']}.information_schema"
+_pk = {r.table_name for r in spark.sql(f"""SELECT table_name FROM {_info}.table_constraints
+        WHERE table_schema = '{P['gold']}' AND constraint_type = 'PRIMARY KEY'""").collect()}
+for _r in spark.sql(f"SELECT table_name, table_type FROM {_info}.tables WHERE table_schema = '{P['gold']}'").collect():
+    if _r.table_name in _CL and (_r.table_type == "VIEW" or _r.table_name not in _pk):
+        spark.sql(f"DROP {'VIEW' if _r.table_type == 'VIEW' else 'TABLE'} {P['catalog']}.{P['gold']}.{_r.table_name}")
+        print("replacing", _r.table_name)
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 11 - `household_profile` - Household entity profile (one row per household)
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.household_profile (
+  household_id STRING NOT NULL COMMENT 'Household id (HH + hash of standardized primary street + postal code); joins to household_profile.',
+  address_id STRING COMMENT 'Primary address id of the household.',
+  city STRING COMMENT 'City of the primary address.',
+  state STRING COMMENT 'State / province / region of the primary address.',
+  postal_code STRING COMMENT 'Postal code of the primary address (US/DE 5-digit, UK and CA alphanumeric).',
+  country STRING COMMENT 'Country code: US, UK, DE, CA.',
+  home_store_id STRING COMMENT 'Store the customer shops most (POS orders), else the store where they registered; joins to silver.stores.',
+  member_count INT COMMENT 'Customers in the household.',
+  kids_count INT COMMENT 'Distinct kids age bands observed (proxy for number of kids).',
+  kids_age_bands ARRAY<STRING> COMMENT 'Kids age bands inferred from kids-size purchases in the household (0-5, 6-9, 10-14, 6-14).',
+  has_kids BOOLEAN COMMENT 'Household bought kids-size products.',
+  email_contactable_members INT COMMENT 'Members contactable by email.',
+  any_email_contactable BOOLEAN COMMENT 'At least one member is contactable by email.',
+  any_sms_contactable BOOLEAN COMMENT 'At least one member is contactable by SMS.',
+  any_paid_media_eligible BOOLEAN COMMENT 'At least one member can be targeted on ad platforms.',
+  household_revenue_12m DECIMAL(14,2) COMMENT 'Sum of members\' revenue_12m (USD).',
+  household_predicted_clv_12m DECIMAL(14,2) COMMENT 'Sum of members\' predicted_clv_12m (USD).',
+  min_member_churn_probability DOUBLE COMMENT 'Lowest churn probability among members (most engaged member).',
+  last_order_date DATE COMMENT 'Most recent order by any member.',
+  top_sport STRING COMMENT 'Most common top sport among members.',
+  best_loyalty_tier_rank INT COMMENT 'Best member tier: 3 Elite, 2 Pro, 1 Rookie, 0 none.',
+  updated_at TIMESTAMP COMMENT 'When the job last rebuilt this row.',
+  CONSTRAINT pk_household_profile PRIMARY KEY (household_id)
+) COMMENT 'Customer Lake: Household profile - one row per household with member roll-ups (members, kids, contactability, revenue, CLV, churn, top sport, best tier). Joined many:1 from customer_profile on household_id. Derived from gold customer_profile, customer_traits, customer_predictions and silver households. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 12 - `purchase_events` - Customer Lake event table: orders
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.purchase_events (
+  order_id STRING NOT NULL COMMENT 'Event id: order id.',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  order_ts TIMESTAMP COMMENT 'Event timestamp: when the order was placed.',
+  channel STRING COMMENT 'Channel of the record (web/app/store for commerce; email/sms/push for messaging; platform for paid).',
+  store_id STRING COMMENT 'Store (POS) or pickup store (BOPIS).',
+  country STRING COMMENT 'Order country derived from currency.',
+  currency STRING COMMENT 'Order currency (USD, CAD, GBP, EUR).',
+  revenue_usd DECIMAL(14,2) COMMENT 'Net merchandise revenue (subtotal - discount) (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
+  total_amount DECIMAL(12,2) COMMENT 'Order total incl. tax and shipping, local currency.',
+  discount_amount DECIMAL(12,2) COMMENT 'Order-level promo discount, local currency.',
+  is_full_price BOOLEAN COMMENT 'No markdown lines and no promo discount.',
+  promo_code STRING COMMENT 'Promo / affiliate code used.',
+  fulfillment_type STRING COMMENT 'ship, bopis, ship_from_store or in_store.',
+  payment_type STRING COMMENT 'Payment method.',
+  utm_source STRING COMMENT 'UTM source of the visit/order (google, meta, tiktok, youtube, email, sms, braze, affiliate, referral); null = direct.',
+  utm_medium STRING COMMENT 'UTM medium (cpc, paid_social, paid_video, email, sms, push, organic, affiliate, referral).',
+  utm_campaign STRING COMMENT 'UTM campaign (campaign_id for owned/paid campaigns, promo code for affiliates).',
+  units INT COMMENT 'Units in the order.',
+  categories ARRAY<STRING> COMMENT 'Distinct product categories in the order.',
+  sports ARRAY<STRING> COMMENT 'Distinct sports in the order.',
+  style_names ARRAY<STRING> COMMENT 'Distinct style names in the order.',
+  has_running_shoes BOOLEAN COMMENT 'Order contains running or trail shoes.',
+  has_cloudstride_3 BOOLEAN COMMENT 'Order contains a CloudStride 3.',
+  has_limited_drop BOOLEAN COMMENT 'Order contains a limited-drop style.',
+  CONSTRAINT pk_purchase_events PRIMARY KEY (order_id)
+) COMMENT 'Customer Lake event table: identified orders (event id order_id, timestamp order_ts) with USD revenue, channel, promo, UTMs and what was bought (categories, sports, styles, running shoes, CloudStride 3, limited drop). Derived from silver orders + order_lines + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 13 - `purchase_line_items` - Customer Lake: order lines with SKU (joins purchase_events and product_catalog_enriched)
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.purchase_line_items (
+  order_line_id STRING NOT NULL COMMENT 'Line id: order_id + "-" + line number.',
+  order_id STRING NOT NULL COMMENT 'Order id; joins to purchase_events.order_id (purchase_events 1:many purchase_line_items).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  sku STRING COMMENT 'SKU bought; joins to product_catalog_enriched.sku (many:1) for category, style, price and stock.',
+  unit_price_usd DECIMAL(12,2) COMMENT 'Price per unit (USD; local currencies converted at fixed demo FX: CAD 1.35, GBP 0.80, EUR 0.93).',
+  discount_usd DECIMAL(12,2) COMMENT 'Discount on the line (USD).',
+  revenue_usd DECIMAL(14,2) COMMENT 'Net line revenue after discount (USD).',
+  CONSTRAINT pk_purchase_line_items PRIMARY KEY (order_line_id)
+) COMMENT 'Customer Lake: purchase line items - one row per order line of an identified order, with the SKU and USD amounts. Related 1:many from purchase_events on order_id, and many:1 to product_catalog_enriched on sku. Derived from silver order_lines + orders. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 14 - `return_events` - Customer Lake event table: returns
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.return_events (
+  return_id STRING NOT NULL COMMENT 'Event id: return id.',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  return_ts TIMESTAMP COMMENT 'Event timestamp: when the return was requested/processed.',
+  order_id STRING COMMENT 'Original order.',
+  sku STRING COMMENT 'SKU = style_id-colorway-size (e.g. RUN0123-01-105 is colorway 01, US size 10.5).',
+  style_id STRING COMMENT 'Product style id (e.g. RUN0123); joins to silver.products / product_catalog_enriched.style_id.',
+  style_name STRING COMMENT 'Product style name (e.g. CloudStride 3 Men\'s).',
+  category STRING COMMENT 'Product category (Running, Trail, Basketball, Training, Lifestyle, Football, Kids Footwear, Apparel, Kids Apparel, Accessories).',
+  sport STRING COMMENT 'Sport of the product (Running, Trail Running, Basketball, Training, Lifestyle, Football, Multi-Sport).',
+  return_reason STRING COMMENT 'too_small, too_big, comfort, defect, not_as_pictured, changed_mind, other.',
+  is_fit_related BOOLEAN COMMENT 'Reason is too_small or too_big.',
+  return_type STRING COMMENT 'refund or exchange.',
+  return_channel STRING COMMENT 'mail or store.',
+  refund_amount DECIMAL(12,2) COMMENT 'Refunded amount, local currency.',
+  quantity INT COMMENT 'Units returned.',
+  CONSTRAINT pk_return_events PRIMARY KEY (return_id)
+) COMMENT 'Customer Lake event table: identified returns (event id return_id, timestamp return_ts) with style, category, reason and fit flag. Derived from silver returns + skus + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 15 - `digital_events` - Customer Lake event table: web and app events
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.digital_events (
+  event_id STRING NOT NULL COMMENT 'Unique id of the web/app event (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  event_ts TIMESTAMP COMMENT 'Event timestamp.',
+  platform STRING COMMENT 'web, ios or android.',
+  event_type STRING COMMENT 'page_view, product_view, search, size_select, add_to_cart, remove_from_cart, checkout_start, purchase, wishlist_add, back_in_stock_signup, app_open, push_open.',
+  session_id STRING COMMENT 'Session id; joins to silver.sessions.',
+  page_type STRING COMMENT 'Page or app screen (home, category, product, search, checkout, pdp...).',
+  sku STRING COMMENT 'SKU = style_id-colorway-size (e.g. RUN0123-01-105 is colorway 01, US size 10.5).',
+  style_id STRING COMMENT 'Product style id (e.g. RUN0123); joins to silver.products / product_catalog_enriched.style_id.',
+  category STRING COMMENT 'Product category (Running, Trail, Basketball, Training, Lifestyle, Football, Kids Footwear, Apparel, Kids Apparel, Accessories).',
+  search_term STRING COMMENT 'Search query, for search events.',
+  selected_size STRING COMMENT 'Size selected on the product page.',
+  utm_source STRING COMMENT 'UTM source of the visit/order (google, meta, tiktok, youtube, email, sms, braze, affiliate, referral); null = direct.',
+  utm_medium STRING COMMENT 'UTM medium (cpc, paid_social, paid_video, email, sms, push, organic, affiliate, referral).',
+  utm_campaign STRING COMMENT 'UTM campaign (campaign_id for owned/paid campaigns, promo code for affiliates).',
+  device_type STRING COMMENT 'Device: mobile/desktop/tablet on web, ios/android in the app.',
+  CONSTRAINT pk_digital_events PRIMARY KEY (event_id)
+) COMMENT 'Customer Lake event table: identified web/app events (event id event_id, timestamp event_ts). Derived from silver web_app_events. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 16 - `message_engagement_events` - Customer Lake event table: email/SMS/push sends and engagement
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.message_engagement_events (
+  message_event_id STRING NOT NULL COMMENT 'Unique id of the send or engagement event (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  event_ts TIMESTAMP COMMENT 'Event timestamp.',
+  channel STRING COMMENT 'email, sms or push.',
+  event_type STRING COMMENT 'send, open, click, bounce, unsubscribe or complaint.',
+  campaign_id STRING COMMENT 'Campaign id: EM-/SMS-/PUSH- owned campaigns, TRG- triggered flows, ME-/GO-/TI-/YO- paid campaigns (Meta/Google/TikTok/YouTube).',
+  campaign_name STRING COMMENT 'Campaign display name.',
+  campaign_objective STRING COMMENT 'engagement, promotion, launch, onboarding, retention, replenishment, win_back.',
+  campaign_type STRING COMMENT 'batch or triggered.',
+  variant STRING COMMENT 'A/B test variant (A or B).',
+  link_url STRING COMMENT 'Clicked URL, for clicks.',
+  device_type STRING COMMENT 'Device: mobile/desktop/tablet on web, ios/android in the app.',
+  CONSTRAINT pk_message_engagement_events PRIMARY KEY (message_event_id)
+) COMMENT 'Customer Lake event table: email/SMS/push sends and engagement (event id message_event_id, timestamp event_ts) with campaign name and objective. Derived from silver message_events + campaigns. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 17 - `run_activity_events` - Customer Lake event table: run-app activities
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.run_activity_events (
+  activity_id STRING NOT NULL COMMENT 'Unique id of the run-app activity (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  start_ts TIMESTAMP COMMENT 'Event timestamp: activity start.',
+  activity_type STRING COMMENT 'run, trail_run, treadmill_run or walk.',
+  distance_km DOUBLE COMMENT 'Distance in km.',
+  distance_miles DOUBLE COMMENT 'Distance in miles.',
+  duration_seconds INT COMMENT 'Moving time in seconds.',
+  avg_pace_sec_per_km DOUBLE COMMENT 'Average pace (seconds per km).',
+  elevation_gain_m DOUBLE COMMENT 'Elevation gain in metres.',
+  shoe_registration_id STRING COMMENT 'Registered shoe used (joins to silver.shoe_mileage).',
+  sku STRING COMMENT 'SKU of the shoe used, when a StrideForge shoe.',
+  shoe_total_miles DOUBLE COMMENT 'Total miles on that shoe to date.',
+  CONSTRAINT pk_run_activity_events PRIMARY KEY (activity_id)
+) COMMENT 'Customer Lake event table: run-app activities (event id activity_id, timestamp start_ts) with shoe and its total mileage. Derived from silver fitness_activities + shoe_mileage. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 18 - `loyalty_events` - Customer Lake event table: loyalty points activity
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.loyalty_events (
+  ledger_id STRING NOT NULL COMMENT 'Unique id of the loyalty ledger entry (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  activity_ts TIMESTAMP COMMENT 'Event timestamp.',
+  loyalty_id STRING COMMENT 'Loyalty membership id.',
+  activity_type STRING COMMENT 'earn, redeem, adjust (return), bonus, expire, opening_balance or tier_change.',
+  points INT COMMENT 'Points added (+) or removed (-).',
+  reference_id STRING COMMENT 'Related order id, bonus code or new tier.',
+  reference_type STRING COMMENT 'order, return, promotion, inactivity or tier.',
+  CONSTRAINT pk_loyalty_events PRIMARY KEY (ledger_id)
+) COMMENT 'Customer Lake event table: loyalty ledger activity (event id ledger_id, timestamp activity_ts). Derived from silver loyalty_transactions. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 19 - `race_registration_events` - Customer Lake event table: race registrations
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.race_registration_events (
+  registration_id STRING NOT NULL COMMENT 'Unique id of the race registration (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  registered_at TIMESTAMP COMMENT 'Event timestamp: when the customer registered.',
+  event_id STRING COMMENT 'Id of the race the customer registered for.',
+  event_name STRING COMMENT 'Name of the race (e.g. Chicago Marathon 2026).',
+  event_type STRING COMMENT 'marathon, half_marathon, 10k or 5k.',
+  event_date DATE COMMENT 'Race date.',
+  event_city STRING COMMENT 'City where the race takes place.',
+  distance_km DOUBLE COMMENT 'Race distance in kilometres (5, 10, 21.1 or 42.2).',
+  registration_source STRING COMMENT 'RaceRoster, Active.com, RunSignup or StrideForge App.',
+  CONSTRAINT pk_race_registration_events PRIMARY KEY (registration_id)
+) COMMENT 'Customer Lake event table: race registrations (event id registration_id, timestamp registered_at) with race date, type and distance. Derived from silver event_registrations. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 20 - `support_events` - Customer Lake event table: support tickets
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.support_events (
+  ticket_id STRING NOT NULL COMMENT 'Unique id of the support ticket (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  created_at TIMESTAMP COMMENT 'Event timestamp: ticket created.',
+  channel STRING COMMENT 'chat, email, phone or social.',
+  category STRING COMMENT 'order_status, returns_refunds, sizing_fit, product_defect, promo_pricing, loyalty_points, account_login.',
+  priority STRING COMMENT 'high, normal or low.',
+  status STRING COMMENT 'open, pending, solved or closed.',
+  sentiment STRING COMMENT 'Rule-based sentiment (negative/neutral).',
+  resolution_hours DOUBLE COMMENT 'Hours to resolution (null while open).',
+  order_id STRING COMMENT 'Related order, when referenced.',
+  CONSTRAINT pk_support_events PRIMARY KEY (ticket_id)
+) COMMENT 'Customer Lake event table: service tickets (event id ticket_id, timestamp created_at) with category, status, sentiment. Derived from silver service_tickets. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 21 - `review_events` - Customer Lake event table: product reviews
+# COMMAND ----------
+
+ddl(r"""
+CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.review_events (
+  review_id STRING NOT NULL COMMENT 'Unique id of the product review (Customer Lake event ID).',
+  unified_customer_id STRING NOT NULL COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  submitted_at TIMESTAMP COMMENT 'Event timestamp: review submitted.',
+  sku STRING COMMENT 'SKU = style_id-colorway-size (e.g. RUN0123-01-105 is colorway 01, US size 10.5).',
+  style_id STRING COMMENT 'Product style id (e.g. RUN0123); joins to silver.products / product_catalog_enriched.style_id.',
+  style_name STRING COMMENT 'Product style name (e.g. CloudStride 3 Men\'s).',
+  category STRING COMMENT 'Product category (Running, Trail, Basketball, Training, Lifestyle, Football, Kids Footwear, Apparel, Kids Apparel, Accessories).',
+  rating INT COMMENT 'Star rating 1-5.',
+  fit_rating STRING COMMENT 'Reviewer-selected fit (runs_small, true_to_size, runs_large).',
+  ai_sentiment STRING COMMENT 'Sentiment (ai_analyze_sentiment for the 20K most recent reviews, rating-based otherwise).',
+  ai_fit_feedback STRING COMMENT 'Fit feedback extracted from the text (ai_classify for recent reviews, keyword rules otherwise).',
+  ai_themes ARRAY<STRING> COMMENT 'Themes mentioned: fit, comfort, durability, style, price.',
+  verified_purchase BOOLEAN COMMENT 'Reviewer bought the product.',
+  CONSTRAINT pk_review_events PRIMARY KEY (review_id)
+) COMMENT 'Customer Lake event table: product reviews (event id review_id, timestamp submitted_at) with rating and AI fit/sentiment. Derived from silver product_reviews + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
+TBLPROPERTIES ('cdp_activation' = 'true')
 """)
 # COMMAND ----------
 
@@ -536,8 +641,10 @@ if "goal_race_date" not in _cols:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Remove the old pre-built audience tables (audiences are now built in Customer Lake)
+# MAGIC ### Remove tables dropped from the gold layer (audiences and campaign reporting now live outside gold)
 # COMMAND ----------
 
-for _t in ("segment_definitions", "segment_membership", "audience_exports"):
+for _t in ("segment_definitions", "segment_membership", "audience_exports", "product_affinity", "drop_calendar",
+           "customer_daily_snapshot", "cohort_retention", "channel_kpis_daily", "store_kpis_daily",
+           "campaign_attribution", "campaign_performance", "campaign_holdout_results"):
     spark.sql(f"DROP TABLE IF EXISTS {P['catalog']}.{P['gold']}.{_t}")

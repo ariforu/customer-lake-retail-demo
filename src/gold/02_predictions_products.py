@@ -2,10 +2,10 @@
 # MAGIC %md
 # MAGIC # Gold 02 - Scores, recommendations and product feed
 # MAGIC
-# MAGIC **What it does:** Builds the product feed, simple rule-based scores (value, churn risk, shoe replacement date ...), top-5 product picks per customer, 'bought together' pairs and monthly customer snapshots.
+# MAGIC **What it does:** Builds the product feed, simple rule-based scores (value, churn risk, shoe replacement date ...) and top-5 product picks per customer.
 # MAGIC
 # MAGIC - **Reads:** gold Customer 360 tables; silver products, prices, inventory, orders, reviews, shoe mileage
-# MAGIC - **Writes:** `product_catalog_enriched`, `customer_predictions`, `customer_product_recommendations`, `product_affinity`, `customer_daily_snapshot`
+# MAGIC - **Writes:** `product_catalog_enriched`, `customer_predictions`, `customer_product_recommendations`
 # MAGIC - **Runs in:** `strideforge_medallion` -> `gold_predictions_products`
 # MAGIC
 # MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
@@ -25,7 +25,7 @@ SELECT max(order_date) AS d, CAST(max(order_date) AS TIMESTAMP) + INTERVAL 1 DAY
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Step 2 - Product feed (price, stock, rating)
+# MAGIC ### Step 2 - Product feed (price, stock, rating), including discontinued products for past purchases
 # COMMAND ----------
 
 run(r"""
@@ -42,14 +42,14 @@ rv AS (SELECT style_id, avg(rating) AS r, count(*) AS n, mode(ai_fit_feedback) A
 SELECT k.sku, p.style_id, p.style_name, p.category, p.sport, p.gender, k.colorway, k.size, k.width,
        CAST(coalesce(px.price, p.msrp) AS DECIMAL(10, 2)) AS current_price, p.msrp, coalesce(px.md, false) AS is_on_markdown,
        CAST(coalesce(inv_dc.q, 0) AS INT) AS available_qty_online, CAST(coalesce(inv_st.q, 0) AS INT) AS available_qty_stores,
-       CASE WHEN coalesce(inv_dc.q, 0) = 0 THEN 'out_of_stock' WHEN inv_dc.q < 10 THEN 'low_stock' ELSE 'in_stock' END AS stock_status,
+       CASE WHEN p.lifecycle_status = 'discontinued' THEN 'discontinued' WHEN coalesce(inv_dc.q, 0) = 0 THEN 'out_of_stock'
+            WHEN inv_dc.q < 10 THEN 'low_stock' ELSE 'in_stock' END AS stock_status,
        round(rv.r, 2) AS avg_rating, CAST(coalesce(rv.n, 0) AS INT) AS review_count, rv.fit AS fit_feedback,
        p.launch_date > (SELECT d FROM asof) - INTERVAL 60 DAYS AS is_new_arrival, p.is_limited_drop, p.image_url,
        concat('https://www.strideforge.com/us/p/', lower(regexp_replace(p.style_name, '[^A-Za-z0-9]+', '-')), '/', p.style_id, '.html?sku=', k.sku) AS product_url,
        current_timestamp() AS updated_at
 FROM ${catalog}.${silver}.skus k JOIN ${catalog}.${silver}.products p USING (style_id)
 LEFT JOIN inv_dc USING (sku) LEFT JOIN inv_st USING (sku) LEFT JOIN px USING (sku) LEFT JOIN rv ON rv.style_id = p.style_id
-WHERE p.lifecycle_status <> 'discontinued'
 """)
 # COMMAND ----------
 
@@ -161,52 +161,4 @@ MERGE INTO ${catalog}.${gold}.customer_predictions t
 USING (SELECT unified_customer_id, style_id FROM ${catalog}.${gold}.customer_product_recommendations WHERE rank = 1) s
 ON t.unified_customer_id = s.unified_customer_id
 WHEN MATCHED THEN UPDATE SET t.next_best_style_id = s.style_id
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 6 - Products often bought together
-# COMMAND ----------
-
-run(r"""
-INSERT OVERWRITE ${catalog}.${gold}.product_affinity BY NAME
-WITH b AS (SELECT DISTINCT order_id, style_id, category FROM ${catalog}.${silver}.order_lines),
-multi AS (SELECT order_id FROM b GROUP BY 1 HAVING count(*) > 1),
-tot AS (SELECT count(*) AS n FROM multi),
-s AS (SELECT style_id, count(*) AS n FROM b JOIN multi USING (order_id) GROUP BY 1),
-pr AS (SELECT x.style_id AS a, y.style_id AS c, first(x.category) AS ac, first(y.category) AS cc, count(*) AS n
-       FROM b x JOIN multi USING (order_id) JOIN b y ON x.order_id = y.order_id AND x.style_id <> y.style_id GROUP BY 1, 2
-       HAVING count(*) >= 30)
-SELECT pr.a AS antecedent_style_id, pr.c AS consequent_style_id, pr.ac AS antecedent_category, pr.cc AS consequent_category,
-       round(pr.n / tot.n, 6) AS support, round(pr.n / sa.n, 4) AS confidence,
-       round((pr.n / sa.n) / (sc.n / tot.n), 3) AS lift, current_timestamp() AS computed_at
-FROM pr CROSS JOIN tot JOIN s sa ON sa.style_id = pr.a JOIN s sc ON sc.style_id = pr.c
-""")
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Step 7 - Month-end customer snapshots
-# COMMAND ----------
-
-run(r"""
-INSERT OVERWRITE ${catalog}.${gold}.customer_daily_snapshot BY NAME
-WITH m AS (SELECT explode(sequence(1, 6)) AS k),
-sd AS (SELECT last_day(add_months((SELECT d FROM asof), -k)) AS snapshot_date FROM m),
-fx AS (SELECT * FROM VALUES ('USD', 1.0), ('CAD', 1.35), ('GBP', 0.80), ('EUR', 0.93) AS t(currency, rate)),
-o AS (SELECT o.unified_customer_id, o.order_date, (o.subtotal_amount - o.discount_amount) / fx.rate AS net_usd
-      FROM ${catalog}.${silver}.orders o JOIN fx USING (currency) WHERE o.unified_customer_id IS NOT NULL),
-agg AS (
-  SELECT sd.snapshot_date, o.unified_customer_id,
-         sum(CASE WHEN o.order_date > sd.snapshot_date - INTERVAL 365 DAYS THEN o.net_usd ELSE 0 END) AS rev12,
-         count_if(o.order_date > sd.snapshot_date - INTERVAL 365 DAYS) AS n12, max(o.order_date) AS last_o, min(o.order_date) AS first_o
-  FROM sd JOIN o ON o.order_date <= sd.snapshot_date GROUP BY 1, 2)
-SELECT a.snapshot_date, a.unified_customer_id,
-       CASE WHEN datediff(a.snapshot_date, a.last_o) > 365 THEN 'lapsed' WHEN datediff(a.snapshot_date, a.last_o) > 180 THEN 'at_risk'
-            WHEN datediff(a.snapshot_date, a.first_o) <= 90 THEN 'new' WHEN a.n12 >= 5 THEN 'loyal' ELSE 'active' END AS lifecycle_stage,
-       CASE WHEN a.n12 >= 5 THEN 'champions' WHEN a.n12 >= 2 THEN 'loyal' WHEN a.n12 = 1 THEN 'promising' ELSE 'hibernating' END AS rfm_segment,
-       cp.loyalty_tier, CAST(a.rev12 AS DECIMAL(14, 2)) AS revenue_12m, CAST(a.n12 AS INT) AS order_count_12m,
-       round(1 / (1 + exp(-(-2.0 + 0.0065 * datediff(a.snapshot_date, a.last_o) - 0.35 * ln(1 + a.n12)))), 4) AS churn_probability,
-       CAST(a.rev12 * (1 - 1 / (1 + exp(-(-2.0 + 0.0065 * datediff(a.snapshot_date, a.last_o) - 0.35 * ln(1 + a.n12))))) * 1.08 AS DECIMAL(14, 2)) AS predicted_clv_12m,
-       cp.email_contactable
-FROM agg a LEFT JOIN ${catalog}.${gold}.customer_profile cp USING (unified_customer_id)
 """)
