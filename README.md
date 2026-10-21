@@ -57,19 +57,25 @@ Two jobs. Every step is a notebook with a short "what it does / reads / writes" 
 
 Point one entity at **`retail_cdp`**:
 
-| Entity | Profile (key) | Related objects |
-|---|---|---|
-| Retail - StrideForge Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_top_recommendation`; event tables `purchase_item_events`, `digital_product_events`, `return_item_events`, `run_shoe_events`, `message_engagement_events`, `loyalty_events`, `race_registration_events`, `support_events`, `review_events`, `trigger_events` |
+| Entity | Profile (key) | Related objects | Description |
+|---|---|---|---|
+| Retail - StrideForge Customer | Customer Profile (Unified Customer ID) | Customer Consent | 1:1 – whether each customer may be contacted by email, SMS, push and on ad platforms |
+| | | Customer Traits | 1:1 – shopping and running behaviour: lifecycle stage, RFM segment, top category and sport, spend, returns, goal race |
+| | | Customer Top Recommendation | 1:1 – the customer's #1 recommended product with name, price, markdown, stock, image and link |
+| | | Purchase Item Events | Event – every item bought, with product name, category, size and the order's totals, promo and payment |
+| | | Digital Product Events | Event – website and app activity (views, searches, add to cart) with the product involved |
+| | | Return Item Events | Event – every return with the product, size, reason and refund |
+| | | Run Shoe Events | Event – runs logged in the run app, with the shoe model worn and its total miles |
+| | | Message Engagement Events | Event – email, SMS and push sends, opens, clicks and unsubscribes |
+| | | Loyalty Events | Event – loyalty points earned, redeemed and tier changes |
+| | | Race Registration Events | Event – race sign-ups with race date and distance |
+| | | Support Events | Event – customer service tickets with topic, status and sentiment |
+| | | Review Events | Event – product reviews with rating and fit / sentiment feedback |
+| | | Trigger Events | Event – journey triggers such as abandoned cart, worn-out shoes and rain for trail runners |
 
 The views read the gold tables directly (no view on a view) and are created once, so job runs never break the
 entity. Audiences are built in Customer Lake; campaign results (opens, clicks, purchases) come from the event tables.
 Exact wizard settings, suggested attributes and example audiences: [docs/customer_lake_setup.md](docs/customer_lake_setup.md).
-
-## Gold data model
-
-![Gold ER diagram](docs/gold_er.png)
-
-![How the gold tables are used](docs/gold_data_model.png)
 
 ## Deploy
 
