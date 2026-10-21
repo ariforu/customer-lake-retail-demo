@@ -6,7 +6,7 @@
 # MAGIC
 # MAGIC - **Reads:** -
 # MAGIC - **Writes:** `retail_bronze` schema and tables
-# MAGIC - **Runs in:** job `strideforge_bronze_setup` -> task `ddl_bronze`
+# MAGIC - **Runs in:** `strideforge_bronze_setup` -> `ddl_bronze`
 # MAGIC
 # MAGIC Catalog and schema names come from widgets (set by the job, or edit them at the top when running by hand).
 # COMMAND ----------

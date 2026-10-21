@@ -38,6 +38,9 @@ Design priorities:
 | CDP | `retail_cdp` | Views the Customer Lake entity points at | `ensure_cdp_views` task |
 | Truth | `retail_synthetic_truth` | Generator answer key (which records are the same person) | Generator |
 
+Diagrams: [gold and CDP layers](docs/gold_data_model.png) · [gold tables and keys](docs/gold_er.png)
+(sources in `docs/*.mmd`).
+
 ## 3. Synthetic data (bronze)
 
 The generator (`src/generator/gen/`) builds 1.5M people and then the records each source system would hold about
@@ -158,7 +161,125 @@ Every notebook includes `src/_params.py`, which reads the catalog and schema wid
 - **`gold_customer_lake`:** unique event ids, TIMESTAMP columns, one row per key for 1:1 objects, and `retail_cdp`
   row counts equal to gold. The task fails if a Customer Lake rule is broken.
 
-## 9. Key decisions
+## 9. Technical implementation
+
+### 9.1 Stack
+
+| Area | Technology |
+|---|---|
+| Language | Python 3.12, PySpark (Spark Connect), SQL (Databricks SQL, ANSI mode) |
+| Data generation | Faker, numpy, pandas, run through `mapInPandas` / `applyInPandas` on Spark |
+| Local development | Databricks Connect 17.3 on serverless (`DatabricksSession`) |
+| Compute | Serverless jobs compute (notebook tasks, no cluster definitions) |
+| Storage and governance | Unity Catalog, Delta Lake, liquid clustering, predictive optimization |
+| AI | Databricks AI Functions: `ai_analyze_sentiment`, `ai_classify` |
+| Deployment | Databricks Asset Bundles (Databricks CLI v1.18) |
+| Source control | Git, GitHub (`ariforu/customer-lake-retail-demo`, branch `main`), Databricks Git folder |
+| Diagrams | Mermaid, rendered with mermaid-cli (`mmdc`) |
+
+### 9.2 Repository layout
+
+```
+databricks.yml                      bundle: name, variables, dev/prod targets
+resources/
+  strideforge_bronze_setup.job.yml  one-time job: DDL + generator + validation
+  strideforge_medallion.job.yml     daily job: bronze -> silver -> gold, CDP views
+src/
+  _params.py                        shared widgets (catalog, schemas) + run() SQL helper
+  ddl/01_bronze.py .. 04_cdp.py     schemas, tables, views (idempotent)
+  generator/
+    gen/                            generator library (one module per domain)
+    generate_bronze.py              notebook entry point (job task)
+    validate_bronze.py              notebook: checks the stories (logic in validate_stories.py)
+    run.py, sf_session.py           local runner + Spark session handling
+  silver/00_functions.py .. 08_*    bronze -> silver notebooks
+  gold/01_customer_360.py .. 04_*   silver -> gold notebooks
+docs/                               Customer Lake setup guide, diagrams (.mmd + .png)
+```
+
+### 9.3 Notebooks
+
+- Every step is a **source-format notebook** (`# Databricks notebook source`, `# COMMAND ----------`,
+  `# MAGIC %md`), so it is a plain `.py` file in Git and a notebook in the workspace.
+- Each notebook starts with a short header (what it does, reads, writes, which job task runs it), followed by
+  numbered steps.
+- `%run ../_params` creates widgets for `catalog`, `bronze`, `silver`, `gold`, `truth` and `cdp` (defaults to the
+  demo names; jobs pass them as `base_parameters`). `run(sql)` replaces `${catalog}`, `${gold}` etc. and runs the
+  statement, so the SQL stays readable and portable.
+- The generator notebook installs Faker with `%pip install faker`.
+
+### 9.4 Generator internals
+
+- `gen/` has one module per domain: `dims`, `persons`, `profiles`, `messy`, `catalog`, `commerce`, `loyalty`,
+  `digital`, `marketing`, `sport`, `service`, `ops`, `cleanup`, plus `config` and `refdata`.
+- Rows are generated in parallel. `spark.range()` creates the work, and pandas functions (Faker plus numpy) build
+  each partition. Results are written straight to Delta. There is no driver-side looping, and no `.cache()` or
+  `.persist()` (not supported on serverless). Scratch tables go to `retail_synthetic_truth` and are dropped by the
+  `cleanup` stage.
+- **Shipping the code to the workers:**
+  - *Locally:* Databricks Connect with `DatabricksEnv().withDependencies("faker")`, plus
+    `cloudpickle.register_pickle_by_value(gen)` so the library travels with the functions.
+  - *In a job:* `sf_session.get_runtime()` zips the `gen` package (file name includes a content hash) and uploads it
+    with `spark.addArtifacts(zip, pyfile=True)` on Spark Connect, or `sparkContext.addPyFile` on classic clusters.
+- **Configuration** comes from environment variables: `SF_CATALOG`, `SF_BRONZE_SCHEMA`, `SF_TRUTH_SCHEMA`,
+  `SF_SCALE`, `SF_PROFILE`, `SF_IN_JOB`. The notebook sets them from its widgets.
+- **Local runner:** `python run.py [stage ...]` runs all or selected stages (`dims persons profiles commerce loyalty
+  digital marketing sport service ops cleanup`).
+
+### 9.5 Spark and SQL patterns
+
+| Pattern | Used for |
+|---|---|
+| SQL UDFs (`CREATE FUNCTION`, 8 in `silver/00_functions`) | Email, phone, name, street, postal and country normalisation, shared by all silver steps |
+| `INSERT OVERWRITE ... BY NAME` | Full refresh of silver and gold tables, atomic and identity-preserving |
+| `MERGE INTO` | Customer enrichment, AI review tags, next-best style on predictions |
+| `QUALIFY row_number() OVER (...) = 1` | Latest version of each raw record, de-duplicated events, top-N per customer |
+| Temp views | Readable multi-step SQL inside a notebook |
+| PySpark DataFrames + scratch Delta tables | Connected components for identity resolution (iterative label propagation with pointer jumping) |
+| `try_cast`, `try_element_at` | Safe casting and array indexing under ANSI mode |
+| AI Functions | Sentiment, fit feedback and themes for the 20K newest reviews (rules for the rest) |
+
+### 9.6 Unity Catalog features
+
+- **Descriptions everywhere.** The gold DDL holds a `COMMENT` on every table and column. The `ddl()` helper parses
+  each `CREATE TABLE IF NOT EXISTS` statement and re-applies the table comment, changed column comments and
+  clustering keys to existing tables, so the DDL file is the source of truth.
+- **Primary keys** (informational constraints) on every customer, household, product and event table.
+- **Liquid clustering** (`CLUSTER BY`, applied to existing tables with `ALTER TABLE ... CLUSTER BY`).
+  **Predictive optimization** (inherited from the metastore) runs `OPTIMIZE` automatically.
+- **Table property** `cdp_activation = 'true'` marks objects that Customer Lake reads.
+- **Views with column comments** in `retail_cdp`.
+- **`information_schema`** is used by one-time migration cells (for example, replacing old views or tables
+  without a primary key).
+
+### 9.7 Databricks Asset Bundle
+
+- Bundle `strideforge-cdp`, `include: resources/*.yml`.
+- **Variables:** `catalog`, `bronze_schema`, `silver_schema`, `gold_schema`, `cdp_schema`, `truth_schema`, `scale`.
+  Override them with `--var name=value`.
+- **Targets:**
+  - `dev` (default): `mode: development`, so jobs are prefixed with the user's name and schedules stay paused.
+  - `prod`: `mode: production`, deployed under `/Workspace/Shared/.bundle/strideforge-cdp/prod`.
+- **Jobs:** notebook tasks on serverless. A YAML anchor (`&params` / `*params`) shares the `base_parameters`
+  across tasks. `max_concurrent_runs: 1`. The generator task has a 4-hour timeout. The medallion schedule is
+  `0 0 5 * * ?` (05:00 UTC), paused.
+- **Commands:**
+  ```bash
+  databricks bundle validate --strict
+  databricks bundle deploy  [-t prod] [--var catalog=<catalog>]
+  databricks bundle run strideforge_bronze_setup   # once per workspace
+  databricks bundle run strideforge_medallion
+  ```
+
+### 9.8 Development workflow
+
+1. Edit locally (notebooks are plain `.py` files). Test ad-hoc queries through Databricks Connect.
+2. `databricks bundle validate --strict` and `databricks bundle deploy`.
+3. Run the affected tasks (`databricks jobs run-now` with `only: [...]`) or the full job, and check the built-in
+   validations.
+4. Commit and push to GitHub `main`. The workspace Git folder pulls `main`.
+
+## 10. Key decisions
 
 | Decision | Why |
 |---|---|
@@ -170,7 +291,7 @@ Every notebook includes `src/_params.py`, which reads the catalog and schema wid
 | Descriptions in DDL, not in the UI | Versioned with the code; the Customer Lake assistant and Genie read them |
 | Fixed demo FX rates (CAD 1.35, GBP 0.80, EUR 0.93) | Simple, deterministic USD reporting |
 
-## 10. Limitations and next steps
+## 11. Limitations and next steps
 
 - `customer_predictions` (CLV, churn, reseller risk) has no `retail_cdp` view yet. Add one with the same pattern
   as `customer_traits`.
