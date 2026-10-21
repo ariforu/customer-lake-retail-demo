@@ -17,6 +17,10 @@ erDiagram
   customer_profile ||--o{ trigger_events : "journey triggers"
   purchase_events ||--|{ purchase_line_items : "order_id"
   customer_profile ||--o{ purchase_item_events : "order lines + product (view)"
+  customer_profile ||--o{ digital_product_events : "web/app + product (view)"
+  customer_profile ||--o{ run_shoe_events : "runs + shoe (view)"
+  customer_profile ||--o{ return_item_events : "returns + product (view)"
+  customer_profile ||--o| customer_top_recommendation : "#1 pick (view)"
   purchase_line_items }o--|| product_catalog_enriched : "sku"
   customer_product_recommendations }o--|| product_catalog_enriched : "sku"
   digital_events }o--o| product_catalog_enriched : "sku"
@@ -113,4 +117,24 @@ erDiagram
     string trigger_id PK
     timestamp trigger_ts
     string trigger_type
+  }
+  digital_product_events {
+    string event_id PK
+    timestamp event_ts
+    string style_name
+  }
+  run_shoe_events {
+    string activity_id PK
+    timestamp start_ts
+    string shoe_name
+  }
+  return_item_events {
+    string return_id PK
+    timestamp return_ts
+    string style_name
+  }
+  customer_top_recommendation {
+    string unified_customer_id PK
+    string rec_product_name
+    string rec_image_url
   }

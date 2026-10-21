@@ -187,7 +187,8 @@ EVENTS = {"purchase_events": ("order_id", "order_ts"), "return_events": ("return
           "run_activity_events": ("activity_id", "start_ts"), "loyalty_events": ("ledger_id", "activity_ts"),
           "race_registration_events": ("registration_id", "registered_at"), "support_events": ("ticket_id", "created_at"),
           "review_events": ("review_id", "submitted_at"),
-          "purchase_item_events": ("order_line_id", "order_ts")}
+          "purchase_item_events": ("order_line_id", "order_ts"), "digital_product_events": ("event_id", "event_ts"),
+          "run_shoe_events": ("activity_id", "start_ts"), "return_item_events": ("return_id", "return_ts")}
 problems = []
 for t, (eid, ts) in EVENTS.items():
     df = spark.table(f"{G}.{t}")
@@ -197,7 +198,8 @@ for t, (eid, ts) in EVENTS.items():
     print(f"{t:28s} rows={r.n:>12,d} distinct_ids={r.d:>12,d} ts={ts_type:10s} {'OK' if ok else 'PROBLEM'}")
     if not ok:
         problems.append(t)
-for t, key in {"household_profile": "household_id", "purchase_line_items": "order_line_id"}.items():
+for t, key in {"household_profile": "household_id", "purchase_line_items": "order_line_id",
+               "customer_top_recommendation": "unified_customer_id"}.items():
     r = spark.table(f"{G}.{t}").selectExpr("count(*) n", f"count(DISTINCT {key}) d").first()
     print(f"{t:28s} rows={r.n:>12,d} distinct_ids={r.d:>12,d}")
     if r.n != r.d:

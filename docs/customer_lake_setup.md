@@ -37,6 +37,10 @@ Every table has a primary key and a description on each column.
 | `purchase_events` | **event table** | event ID `order_id`, timestamp `order_ts` |
 | `purchase_line_items` | 1:many **from `purchase_events`** | join `order_id = order_id` (one row per order line, with `sku`) |
 | `purchase_item_events` | **event table** (view) | event ID `order_line_id`, timestamp `order_ts`; one row per order line with order **and product** details: the easiest way to filter purchases by product name |
+| `digital_product_events` | **event table** (view) | event ID `event_id`, timestamp `event_ts`; web/app events with product name, sport, gender, size, limited drop, today's price/markdown/stock |
+| `run_shoe_events` | **event table** (view) | event ID `activity_id`, timestamp `start_ts`; runs with the shoe model, category and size used |
+| `return_item_events` | **event table** (view) | event ID `return_id`, timestamp `return_ts`; returns with product gender/colorway/size, original order channel, refund in USD |
+| `customer_top_recommendation` | **1:1** (view) | join `unified_customer_id`; #1 recommended product name, price, markdown, stock, image URL, product URL: bulk-create its columns and map them to sync fields |
 | `return_events` | **event table** | event ID `return_id`, timestamp `return_ts` |
 | `digital_events` | **event table** | event ID `event_id`, timestamp `event_ts` |
 | `message_engagement_events` | **event table** | event ID `message_event_id`, timestamp `event_ts` |
@@ -45,6 +49,10 @@ Every table has a primary key and a description on each column.
 | `race_registration_events` | **event table** | event ID `registration_id`, timestamp `registered_at` |
 | `support_events` | **event table** | event ID `ticket_id`, timestamp `created_at` |
 | `review_events` | **event table** | event ID `review_id`, timestamp `submitted_at` |
+
+The five views repeat their base tables with product details added. For product-based filters, use the view
+(`purchase_item_events`, `digital_product_events`, `run_shoe_events`, `return_item_events`) instead of the base event
+table; keep the base tables for everything else.
 
 **Product data.** `product_catalog_enriched` (key `sku`) is not keyed by customer, so relate it to the tables that
 carry a `sku`, each as **many:1** on `sku = sku`:
@@ -66,7 +74,9 @@ carry a `sku`, each as **many:1** on `sku = sku`:
   - `Email Opens (30d)` = Count of `message_engagement_events.message_event_id` where `event_type = 'open'`, last 30 days
   - `Run Miles (30d)` = Sum of `run_activity_events.distance_miles`, last 30 days
   - `Recommended SKUs` = List of `customer_product_recommendations.sku`
-- **Event attributes** (for event filters): `purchase_item_events.style_name`, `.category`, `.sport`, `.gender`,
+- **Event attributes** (for event filters): `digital_product_events.style_name`, `.event_type`, `.is_limited_drop`;
+  `run_shoe_events.shoe_name`, `.distance_miles`; `return_item_events.style_name`, `.size`, `.return_reason`;
+  `purchase_item_events.style_name`, `.category`, `.sport`, `.gender`,
   `.size`, `.is_limited_drop`, `.revenue_usd`; `purchase_events.channel`, `.categories`, `.has_running_shoes`,
   `.has_cloudstride_3`, `.revenue_usd`; `return_events.return_reason`, `.is_fit_related`, `.style_name`;
   `digital_events.event_type`, `.category`, `.sku`; `message_engagement_events.event_type`, `.channel`, `.campaign_id`;
@@ -107,6 +117,9 @@ Column attributes: `member_count`, `has_kids`, `kids_age_bands`, `household_reve
 | Recent purchasers (suppress) | Customer | event `purchase_events` in last 14 days (use as a blocklist on prospecting syncs) |
 | Bought trail shoes recently | Customer | event `purchase_item_events` in last 30 days where `category = Trail` |
 | Bought a CloudStride 3 | Customer | event `purchase_item_events` in last 180 days where `style_name` contains `CloudStride 3` |
+| CloudStride 3 cart abandoners | Customer | event `digital_product_events` `event_type = add_to_cart` and `style_name` contains `CloudStride 3` in last 7 days, **but not** event `purchase_item_events` same product in last 7 days |
+| Running in an old CloudStride 2 | Customer | event `run_shoe_events` `shoe_name` contains `CloudStride 2` and `shoe_total_miles >= 400` in last 30 days |
+| Top pick on markdown (email) | Customer | `rec_is_on_markdown = true` AND `rec_stock_status = in_stock` AND `email_contactable`; map `rec_product_name`, `rec_image_url`, `rec_product_url` in the sync |
 | Viewed a limited drop | Customer | event `digital_events` `event_type = product_view` in last 7 days where product `is_limited_drop = true` |
 | Recommended item on markdown | Customer | `customer_product_recommendations` product `is_on_markdown = true` AND `stock_status = in_stock` |
 | Email fatigued | Customer | `email_contactable` AND `Email Opens (30d) = 0` |
