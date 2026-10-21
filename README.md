@@ -106,3 +106,8 @@ src/silver/           bronze -> silver notebooks
 src/gold/             silver -> gold notebooks
 docs/                 diagrams and the Customer Lake setup guide
 ```
+
+## Demo video
+
+[Watch on YouTube](https://youtu.be/zxey3i30e5o) – shows how to create a Customer Lake campaign agent that builds
+audiences in natural language on the StrideForge CDP data.
