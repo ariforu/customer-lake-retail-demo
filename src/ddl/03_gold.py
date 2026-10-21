@@ -666,10 +666,14 @@ if "goal_race_date" not in _cols:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Remove tables dropped from the gold layer (audiences and campaign reporting now live outside gold)
+# MAGIC ### Remove objects that no longer belong in gold (old audience/reporting tables; views moved to retail_cdp)
 # COMMAND ----------
 
 for _t in ("segment_definitions", "segment_membership", "audience_exports", "product_affinity", "drop_calendar",
            "customer_daily_snapshot", "cohort_retention", "channel_kpis_daily", "store_kpis_daily",
            "campaign_attribution", "campaign_performance", "campaign_holdout_results"):
     spark.sql(f"DROP TABLE IF EXISTS {P['catalog']}.{P['gold']}.{_t}")
+# Customer Lake views moved to retail_cdp (ddl/04_cdp)
+for _v in ("purchase_item_events", "digital_product_events", "return_item_events", "run_shoe_events",
+           "customer_top_recommendation"):
+    spark.sql(f"DROP VIEW IF EXISTS {P['catalog']}.{P['gold']}.{_v}")
