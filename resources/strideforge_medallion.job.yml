@@ -4,7 +4,7 @@ resources:
       name: strideforge_medallion
       description: >
         Bronze -> silver -> gold for the StrideForge CDP: conformance, identity resolution, Customer 360,
-        propensity scores, product feed, journey triggers and the Customer Lake tables.
+        propensity scores, product feed, journey triggers, the Customer Lake tables and the retail_cdp views.
       tags:
         project: strideforge_cdp
       max_concurrent_runs: 1
@@ -23,10 +23,17 @@ resources:
               silver: ${var.silver_schema}
               gold: ${var.gold_schema}
               truth: ${var.truth_schema}
+              cdp: ${var.cdp_schema}
 
         - task_key: ensure_gold_tables
           notebook_task:
             notebook_path: ../src/ddl/03_gold.py
+            base_parameters: *params
+
+        - task_key: ensure_cdp_views
+          depends_on: [{task_key: ensure_gold_tables}]
+          notebook_task:
+            notebook_path: ../src/ddl/04_cdp.py
             base_parameters: *params
 
         - task_key: silver_functions
@@ -110,7 +117,7 @@ resources:
             base_parameters: *params
 
         - task_key: gold_customer_lake
-          depends_on: [{task_key: gold_predictions_products}]
+          depends_on: [{task_key: gold_predictions_products}, {task_key: ensure_cdp_views}]
           notebook_task:
             notebook_path: ../src/gold/04_customer_lake.py
             base_parameters: *params

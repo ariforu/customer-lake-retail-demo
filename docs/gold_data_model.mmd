@@ -2,40 +2,33 @@ flowchart LR
   classDef core fill:#1F6FB2,stroke:#0B2E4F,stroke-width:2px,color:#FFFFFF
   classDef cdp fill:#E8F1FB,stroke:#1F6FB2,stroke-width:1.5px,color:#0B2E4F
   classDef evt fill:#EAF7EF,stroke:#1E8E4E,stroke-width:1.5px,color:#0E3B22
-  classDef ana fill:#F4F4F4,stroke:#8A8A8A,stroke-width:1px,color:#333333
+  classDef gold fill:#FFF8E1,stroke:#B8860B,stroke-width:1px,color:#4A3800
   classDef ext fill:#FFF6E5,stroke:#C98A00,stroke-width:1px,color:#5A3E00
 
-  subgraph CL["Used by Customer Lake  -  entity: Retail - StrideForge Customer"]
-    direction LR
-    PROFILE["<b>customer_profile</b><br/><i>profile table, key unified_customer_id</i>"]:::core
-    ONE["<b>1 : 1</b><br/>customer_consent<br/>customer_traits<br/>customer_predictions"]:::cdp
-    HH["<b>many : 1</b><br/>household_profile"]:::cdp
-    MANY["<b>1 : many</b><br/>customer_identity_map<br/>customer_product_recommendations"]:::cdp
-    TOPREC["<b>1 : 1</b> (view)<br/>customer_top_recommendation"]:::cdp
-    EV["<b>Event tables</b>  (event id + timestamp)<br/>purchase_events · purchase_item_events (view)<br/>return_events · digital_events<br/>message_engagement_events · run_activity_events<br/>loyalty_events<br/>race_registration_events<br/>support_events · review_events<br/><i>+ views with product details:</i><br/>digital_product_events · run_shoe_events<br/>return_item_events"]:::evt
-    LINES["<b>purchase_line_items</b><br/><i>1 : many from purchase_events</i>"]:::cdp
-    CATALOG["<b>product_catalog_enriched</b><br/><i>many : 1 on sku</i>"]:::cdp
-
-    PROFILE --- ONE
-    PROFILE --> HH
-    PROFILE --> MANY
-    PROFILE --- TOPREC
-    PROFILE --> EV
-    EV -->|"order_id"| LINES
-    LINES -->|"sku"| CATALOG
-    EV -.->|"sku (digital, return, review, run)"| CATALOG
-    MANY -.->|"sku (recommendations)"| CATALOG
+  subgraph GOLD["retail_gold  -  Delta tables, refreshed by strideforge_medallion"]
+    direction TB
+    G1["customer_profile · customer_consent<br/>customer_traits · customer_predictions<br/>household_profile · customer_identity_map"]:::gold
+    G2["purchase_events · purchase_line_items<br/>return_events · digital_events<br/>run_activity_events · message_engagement_events<br/>loyalty / race_registration / support / review _events<br/>trigger_events"]:::gold
+    G3["product_catalog_enriched<br/>customer_product_recommendations"]:::gold
+    G4["identity_resolution_stats"]:::gold
   end
 
-  subgraph OTHER["Other gold"]
-    direction TB
-    TRIG["trigger_events<br/><i>journey triggers</i>"]:::ana
-    IRS["identity_resolution_stats<br/><i>identity-resolution proof</i>"]:::ana
+  subgraph CDP["retail_cdp  -  views the Customer Lake entity points at"]
+    direction LR
+    PROFILE["<b>customer_profile</b><br/><i>profile table, key unified_customer_id</i>"]:::core
+    ONE["<b>1 : 1</b><br/>customer_consent<br/>customer_traits<br/>customer_top_recommendation"]:::cdp
+    EV["<b>Event tables</b>  (event id + timestamp)<br/>purchase_item_events · digital_product_events<br/>return_item_events · run_shoe_events<br/>message_engagement_events · loyalty_events<br/>race_registration_events · support_events<br/>review_events · trigger_events"]:::evt
+    PROFILE --- ONE
+    PROFILE -->|"1 : many"| EV
   end
 
   LAKE(["<b>Customer Lake</b><br/>attributes · audiences · syncs"]):::ext
   DEST(["Braze · SFMC · Meta · Google ..."]):::ext
 
-  CL ==> LAKE
+  G1 -->|"1:1 views"| PROFILE
+  G2 -->|"1:1 views + product details"| EV
+  G3 -->|"product details"| EV
+  G3 -->|"#1 pick"| ONE
+  CDP ==> LAKE
   LAKE ==>|"syncs"| DEST
-  DEST -.->|"opens, clicks, purchases flow back into bronze, then the event tables"| EV
+  DEST -.->|"opens, clicks, purchases flow back into bronze, then gold"| GOLD

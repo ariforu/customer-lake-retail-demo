@@ -3,7 +3,7 @@ resources:
     strideforge_bronze_setup:
       name: strideforge_bronze_setup
       description: >
-        Creates the StrideForge bronze/silver/gold schemas and tables, then generates the synthetic bronze layer
+        Creates the StrideForge bronze/silver/gold schemas and tables and the retail_cdp views, then generates the synthetic bronze layer
         (1.5M customers at scale=1.0). Run once per workspace before strideforge_medallion.
       tags:
         project: strideforge_cdp
@@ -18,6 +18,7 @@ resources:
               silver: ${var.silver_schema}
               gold: ${var.gold_schema}
               truth: ${var.truth_schema}
+              cdp: ${var.cdp_schema}
 
         - task_key: ddl_silver
           depends_on: [{task_key: ddl_bronze}]
@@ -31,8 +32,14 @@ resources:
             notebook_path: ../src/ddl/03_gold.py
             base_parameters: *params
 
-        - task_key: generate_bronze
+        - task_key: ddl_cdp
           depends_on: [{task_key: ddl_gold}]
+          notebook_task:
+            notebook_path: ../src/ddl/04_cdp.py
+            base_parameters: *params
+
+        - task_key: generate_bronze
+          depends_on: [{task_key: ddl_cdp}]
           timeout_seconds: 14400
           notebook_task:
             notebook_path: ../src/generator/generate_bronze.py

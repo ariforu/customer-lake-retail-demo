@@ -2,9 +2,9 @@
 # MAGIC %md
 # MAGIC # Gold 04 - Customer Lake tables
 # MAGIC
-# MAGIC **What it does:** Fills the household table, purchase line items and nine customer event tables that Customer Lake entities point at, then checks Customer Lake's rules (unique ids, TIMESTAMP column). The tables and their descriptions are created by the gold DDL notebook.
+# MAGIC **What it does:** Fills the household table, purchase line items and nine customer event tables that Customer Lake entities point at, then checks Customer Lake's rules (unique ids, TIMESTAMP column) on the gold tables and the `retail_cdp` views. The tables and their descriptions are created by the gold DDL notebook.
 # MAGIC
-# MAGIC - **Reads:** gold Customer 360 tables; silver orders, order lines, returns, events, messages, run, loyalty, race, support and review tables
+# MAGIC - **Reads:** gold Customer 360 tables; `retail_cdp` views (checks only); silver orders, order lines, returns, events, messages, run, loyalty, race, support and review tables
 # MAGIC - **Writes:** `household_profile`, `purchase_line_items` and the `*_events` tables
 # MAGIC - **Runs in:** `strideforge_medallion` -> `gold_customer_lake`
 # MAGIC
@@ -181,27 +181,35 @@ WHERE r.unified_customer_id IS NOT NULL
 # MAGIC ### Step 8 - Validate Customer Lake requirements
 # COMMAND ----------
 
-G = f"{P['catalog']}.{P['gold']}"
-EVENTS = {"purchase_events": ("order_id", "order_ts"), "return_events": ("return_id", "return_ts"),
-          "digital_events": ("event_id", "event_ts"), "message_engagement_events": ("message_event_id", "event_ts"),
-          "run_activity_events": ("activity_id", "start_ts"), "loyalty_events": ("ledger_id", "activity_ts"),
-          "race_registration_events": ("registration_id", "registered_at"), "support_events": ("ticket_id", "created_at"),
-          "review_events": ("review_id", "submitted_at"),
-          "purchase_item_events": ("order_line_id", "order_ts"), "digital_product_events": ("event_id", "event_ts"),
-          "run_shoe_events": ("activity_id", "start_ts"), "return_item_events": ("return_id", "return_ts")}
+G, CDP = f"{P['catalog']}.{P['gold']}", f"{P['catalog']}.{P['cdp']}"
+EVENTS = {  # event table -> (event id, timestamp)
+    f"{G}.purchase_events": ("order_id", "order_ts"), f"{G}.return_events": ("return_id", "return_ts"),
+    f"{G}.digital_events": ("event_id", "event_ts"), f"{G}.message_engagement_events": ("message_event_id", "event_ts"),
+    f"{G}.run_activity_events": ("activity_id", "start_ts"), f"{G}.loyalty_events": ("ledger_id", "activity_ts"),
+    f"{G}.race_registration_events": ("registration_id", "registered_at"), f"{G}.support_events": ("ticket_id", "created_at"),
+    f"{G}.review_events": ("review_id", "submitted_at"), f"{G}.trigger_events": ("trigger_id", "trigger_ts"),
+    f"{CDP}.purchase_item_events": ("order_line_id", "order_ts"), f"{CDP}.digital_product_events": ("event_id", "event_ts"),
+    f"{CDP}.run_shoe_events": ("activity_id", "start_ts"), f"{CDP}.return_item_events": ("return_id", "return_ts")}
 problems = []
 for t, (eid, ts) in EVENTS.items():
-    df = spark.table(f"{G}.{t}")
+    df = spark.table(t)
     ts_type = dict(df.dtypes)[ts]
     r = df.selectExpr("count(*) AS n", f"count(DISTINCT {eid}) AS d", "count(unified_customer_id) AS k").first()
     ok = r.n == r.d and r.k == r.n and ts_type in ("timestamp", "timestamp_ntz")
-    print(f"{t:28s} rows={r.n:>12,d} distinct_ids={r.d:>12,d} ts={ts_type:10s} {'OK' if ok else 'PROBLEM'}")
+    print(f"{t.split('.', 1)[1]:40s} rows={r.n:>12,d} distinct_ids={r.d:>12,d} ts={ts_type:10s} {'OK' if ok else 'PROBLEM'}")
     if not ok:
         problems.append(t)
-for t, key in {"household_profile": "household_id", "purchase_line_items": "order_line_id",
-               "customer_top_recommendation": "unified_customer_id"}.items():
-    r = spark.table(f"{G}.{t}").selectExpr("count(*) n", f"count(DISTINCT {key}) d").first()
-    print(f"{t:28s} rows={r.n:>12,d} distinct_ids={r.d:>12,d}")
+for t, key in {f"{G}.household_profile": "household_id", f"{G}.purchase_line_items": "order_line_id",
+               f"{CDP}.customer_top_recommendation": "unified_customer_id"}.items():
+    r = spark.table(t).selectExpr("count(*) n", f"count(DISTINCT {key}) d").first()
+    print(f"{t.split('.', 1)[1]:40s} rows={r.n:>12,d} distinct_ids={r.d:>12,d}")
     if r.n != r.d:
         problems.append(t)
+# retail_cdp 1:1 views must return exactly the rows of their gold table
+for t in ["customer_profile", "customer_consent", "customer_traits", "trigger_events", "support_events", "review_events",
+          "race_registration_events", "message_engagement_events", "loyalty_events"]:
+    n_cdp, n_gold = spark.table(f"{CDP}.{t}").count(), spark.table(f"{G}.{t}").count()
+    print(f"{P['cdp'] + '.' + t:40s} rows={n_cdp:>12,d} gold={n_gold:>12,d} {'OK' if n_cdp == n_gold else 'PROBLEM'}")
+    if n_cdp != n_gold:
+        problems.append(f"{CDP}.{t}")
 assert not problems, f"Customer Lake requirement violations: {problems}"

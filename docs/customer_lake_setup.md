@@ -1,18 +1,24 @@
 # Customer Lake setup for StrideForge
 
-How to model the StrideForge gold layer as **Customer Lake** entities, attributes and audiences.
+How to model StrideForge as a **Customer Lake** entity with attributes and audiences.
 Reference: [Set up entities](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/customer-data/set-up-entities),
 [Create attributes](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/customer-data/create-attributes),
 [Create audiences](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/create-audiences).
 
-All objects live in `customer_lake_si.retail_gold` (replace with your catalog/schema if deployed elsewhere).
-They are plain Delta tables, refreshed by the `strideforge_medallion` job (`gold_customer_lake` task).
-Every table has a primary key and a description on each column.
+Point Customer Lake at **`customer_lake_si.retail_cdp`** (replace the catalog if deployed elsewhere). It holds the
+14 views the entity uses, created by notebook `ddl/04_cdp`:
+
+- 1:1 views over the gold tables (same rows and columns), and
+- event views that add product details to purchases, web/app events, runs and returns.
+
+All views read the `retail_gold` Delta tables, which the `strideforge_medallion` job refreshes. Every view and column
+has a description. Views are created once (`IF NOT EXISTS`), so job runs never replace them and the entity keeps
+working.
 
 ## 0. Prerequisites
-- Grant Customer Lake access to the data ([Grant access to your data](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/set-up/configure-workspace#grant-data-access)):
-  `USE CATALOG` on `customer_lake_si`, `USE SCHEMA` + `SELECT` on `customer_lake_si.retail_gold`.
-- Entity budget: an instance supports **5 entities**; this design uses **2** (Customer, Household).
+- Grant Customer Lake access ([Grant access to your data](https://docs.databricks.com/aws/en/custmrlke/campaign-agents/set-up/configure-workspace#grant-data-access)):
+  `USE CATALOG` on `customer_lake_si`, `USE SCHEMA` + `SELECT` on `customer_lake_si.retail_cdp` (or use **Grant
+  tables** in the relationship editor). Views run with their owner's rights, so no access to `retail_gold` is needed.
 
 ## 1. Entity: Customer
 
@@ -20,113 +26,77 @@ Every table has a primary key and a description on each column.
 
 | Wizard field | Value |
 |---|---|
-| Name | `Customer` |
+| Name | `Retail - StrideForge Customer` |
 | Description | One unified StrideForge customer (identity-resolved across POS, e-com, app, loyalty, run app) |
-| Select table | `retail_gold.customer_profile` |
+| Select table | `retail_cdp.customer_profile` |
 | Primary key | `unified_customer_id` |
 
-**Manage relationships** (join every table on `unified_customer_id = unified_customer_id`):
+**Manage relationships**. Every join is `unified_customer_id = unified_customer_id`:
 
-| Related table | Cardinality | Notes |
-|---|---|---|
-| `customer_consent` | 1:1 | consent flags (also use in connector rules) |
-| `customer_traits` | 1:1 | RFM, lifecycle, affinities, run miles, upcoming / goal race |
-| `customer_predictions` | 1:1 | CLV, churn, replacement date, drop hype, reseller risk |
-| `customer_product_recommendations` | 1:many | aggregate with `List` (e.g. top SKUs) |
-| `customer_identity_map` | 1:many | aggregate with `Count Distinct` / `List` on `id_type` |
-| `purchase_events` | **event table** | event ID `order_id`, timestamp `order_ts` |
-| `purchase_line_items` | 1:many **from `purchase_events`** | join `order_id = order_id` (one row per order line, with `sku`) |
-| `purchase_item_events` | **event table** (view) | event ID `order_line_id`, timestamp `order_ts`; one row per order line with order **and product** details: the easiest way to filter purchases by product name |
-| `digital_product_events` | **event table** (view) | event ID `event_id`, timestamp `event_ts`; web/app events with product name, sport, gender, size, limited drop, today's price/markdown/stock |
-| `run_shoe_events` | **event table** (view) | event ID `activity_id`, timestamp `start_ts`; runs with the shoe model, category and size used |
-| `return_item_events` | **event table** (view) | event ID `return_id`, timestamp `return_ts`; returns with product gender/colorway/size, original order channel, refund in USD |
-| `customer_top_recommendation` | **1:1** (view) | join `unified_customer_id`; #1 recommended product name, price, markdown, stock, image URL, product URL: bulk-create its columns and map them to sync fields |
-| `return_events` | **event table** | event ID `return_id`, timestamp `return_ts` |
-| `digital_events` | **event table** | event ID `event_id`, timestamp `event_ts` |
-| `message_engagement_events` | **event table** | event ID `message_event_id`, timestamp `event_ts` |
-| `run_activity_events` | **event table** | event ID `activity_id`, timestamp `start_ts` |
-| `loyalty_events` | **event table** | event ID `ledger_id`, timestamp `activity_ts` |
-| `race_registration_events` | **event table** | event ID `registration_id`, timestamp `registered_at` |
-| `support_events` | **event table** | event ID `ticket_id`, timestamp `created_at` |
-| `review_events` | **event table** | event ID `review_id`, timestamp `submitted_at` |
+| Related object (`retail_cdp`) | Cardinality | Event ID / timestamp | What it adds |
+|---|---|---|---|
+| `customer_consent` | 1:1 | | Consent flags per channel (also use in connector rules) |
+| `customer_traits` | 1:1 | | RFM, lifecycle, top category/sport, spend, returns, run miles, goal race |
+| `customer_top_recommendation` | 1:1 | | #1 recommended product: name, price, markdown, stock, image URL, product URL |
+| `purchase_item_events` | **event table** | `order_line_id` / `order_ts` | One row per order line: product name, category, sport, size, line and **order** totals, promo, payment, UTMs |
+| `digital_product_events` | **event table** | `event_id` / `event_ts` | Web/app events with product name, sport, size, limited drop, today's price/markdown/stock |
+| `return_item_events` | **event table** | `return_id` / `return_ts` | Returns with product, size, reason, original order channel, refund (USD) |
+| `run_shoe_events` | **event table** | `activity_id` / `start_ts` | Runs with the shoe model, size and its total miles |
+| `message_engagement_events` | **event table** | `message_event_id` / `event_ts` | Email/SMS/push sends, opens, clicks, unsubscribes |
+| `loyalty_events` | **event table** | `ledger_id` / `activity_ts` | Points earned, redeemed, tier changes |
+| `race_registration_events` | **event table** | `registration_id` / `registered_at` | Race sign-ups with race date and distance |
+| `support_events` | **event table** | `ticket_id` / `created_at` | Support tickets with category, status, sentiment |
+| `review_events` | **event table** | `review_id` / `submitted_at` | Product reviews with rating and AI fit/sentiment |
+| `trigger_events` | **event table** | `trigger_id` / `trigger_ts` | Journey triggers (cart abandoned, shoe mileage, rain for trail runners ...) |
 
-The five views repeat their base tables with product details added. For product-based filters, use the view
-(`purchase_item_events`, `digital_product_events`, `run_shoe_events`, `return_item_events`) instead of the base event
-table; keep the base tables for everything else.
+`purchase_item_events` has one event per **order line**. Conditions on order totals (`order_revenue_usd`,
+`is_full_price`, `payment_type`) work directly; to count **orders**, use an aggregation attribute with Count Distinct
+of `order_id` (an event count counts lines).
 
-**Product data.** `product_catalog_enriched` (key `sku`) is not keyed by customer, so relate it to the tables that
-carry a `sku`, each as **many:1** on `sku = sku`:
-`purchase_line_items`, `customer_product_recommendations`, `digital_events`, `return_events`, `review_events`,
-`run_activity_events` (the shoe used). This makes product fields such as `category`, `sport`, `current_price`,
-`is_on_markdown`, `stock_status`, `is_new_arrival` and `is_limited_drop` usable in attributes and event filters.
-
-### Recommended Customer attributes
-- **Column attributes (bulk-create)** from `customer_profile`, `customer_consent`, `customer_traits`, `customer_predictions`:
-  `country`, `state`, `city`, `gender`, `age_band`, `loyalty_tier`, `points_balance`, `shoe_size_us`, `home_store_id`,
-  `email_contactable`, `sms_contactable`, `push_contactable`, `paid_media_eligible`, `do_not_sell`, `global_suppression`,
-  `lifecycle_stage`, `rfm_segment`, `top_category`, `top_sport`, `discount_sensitivity`, `days_since_last_order`,
-  `order_count_12m`, `revenue_12m`, `return_rate`, `fit_return_count`, `run_miles_90d`, `goal_race_date`,
-  `predicted_clv_12m`, `clv_tier`, `churn_probability`, `active_shoe_miles`, `predicted_shoe_replacement_date`,
-  `drop_hype_score`, `reseller_risk_score`, `best_send_hour`.
+### Recommended attributes
+- **Column attributes (bulk-create)** on the Tables tab:
+  - `customer_profile`: `country`, `state`, `city`, `gender`, `age_band`, `loyalty_tier`, `points_balance`,
+    `shoe_size_us`, `home_store_id`, `email_contactable`, `sms_contactable`, `push_contactable`, `paid_media_eligible`
+  - `customer_consent`: `do_not_sell`, `global_suppression`
+  - `customer_traits`: `lifecycle_stage`, `rfm_segment`, `top_category`, `top_sport`, `discount_sensitivity`,
+    `days_since_last_order`, `order_count_12m`, `revenue_12m`, `return_rate`, `fit_return_count`, `run_miles_90d`,
+    `goal_race_date`
+  - `customer_top_recommendation`: all columns (map `rec_product_name`, `rec_image_url`, `rec_product_url` in syncs)
+- **Event attributes** (+ New attribute → Create an event attribute). Event filters can only use an event table's own
+  columns, so create the ones your audiences need:
+  - `purchase_item_events`: `style_name`, `category`, `sport`, `size`, `is_limited_drop`, `order_revenue_usd`,
+    `is_full_price`, `promo_code`, `channel`
+  - `digital_product_events`: `event_type`, `style_name`, `category`, `is_limited_drop`
+  - `return_item_events`: `style_name`, `return_reason`, `is_fit_related`, `size`
+  - `run_shoe_events`: `shoe_name`, `shoe_total_miles`, `distance_miles`
+  - `message_engagement_events`: `event_type`, `channel`, `campaign_id`
+  - `race_registration_events`: `event_type`, `event_date`; `support_events`: `status`, `category`;
+    `review_events`: `rating`, `ai_fit_feedback`; `trigger_events`: `trigger_type`
 - **Aggregation attributes**
-  - `Total Spend (90d)` = Sum of `purchase_events.revenue_usd`, last 90 days
-  - `Orders (Lifetime)` = Count of `purchase_events.order_id`
+  - `Total Spend (90d)` = Sum of `purchase_item_events.revenue_usd`, last 90 days
+  - `Orders (90d)` = Count Distinct of `purchase_item_events.order_id`, last 90 days
   - `Email Opens (30d)` = Count of `message_engagement_events.message_event_id` where `event_type = 'open'`, last 30 days
-  - `Run Miles (30d)` = Sum of `run_activity_events.distance_miles`, last 30 days
-  - `Recommended SKUs` = List of `customer_product_recommendations.sku`
-- **Event attributes** (for event filters): `digital_product_events.style_name`, `.event_type`, `.is_limited_drop`;
-  `run_shoe_events.shoe_name`, `.distance_miles`; `return_item_events.style_name`, `.size`, `.return_reason`;
-  `purchase_item_events.style_name`, `.category`, `.sport`, `.gender`,
-  `.size`, `.is_limited_drop`, `.revenue_usd`; `purchase_events.channel`, `.categories`, `.has_running_shoes`,
-  `.has_cloudstride_3`, `.revenue_usd`; `return_events.return_reason`, `.is_fit_related`, `.style_name`;
-  `digital_events.event_type`, `.category`, `.sku`; `message_engagement_events.event_type`, `.channel`, `.campaign_id`;
-  `run_activity_events.activity_type`, `.distance_miles`; `race_registration_events.event_type`, `.event_date`;
-  `support_events.category`; `review_events.rating`, `.ai_fit_feedback`.
-- **Product attributes** (through the `sku` joins): `product_catalog_enriched.category`, `.sport`, `.style_name`,
-  `.current_price`, `.is_on_markdown`, `.stock_status`, `.is_new_arrival`, `.is_limited_drop`, `.fit_feedback`.
+  - `Run Miles (30d)` = Sum of `run_shoe_events.distance_miles`, last 30 days
 
-## 2. Entity: Household
+## 2. Audiences to build
 
-| Wizard field | Value |
+| Audience | Conditions |
 |---|---|
-| Name | `Household` |
-| Select table | `retail_gold.household_profile` |
-| Primary key | `household_id` |
+| CloudStride 3 fit-return save | event `return_item_events` in last 180 days where `style_name` contains `CloudStride 3` and `return_reason = too_small`; `email_contactable`; **but not** event `support_events` where `status` in (open, pending) |
+| CloudStride 3 cart abandoners | event `digital_product_events` in last 7 days where `event_type = add_to_cart` and `style_name` contains `CloudStride 3`, **but not** event `purchase_item_events` in last 7 days where `style_name` contains `CloudStride 3` |
+| Running in a worn-out CloudStride 2 | event `run_shoe_events` in last 30 days where `shoe_name` contains `CloudStride 2` and `shoe_total_miles >= 400` |
+| Bought trail shoes recently | event `purchase_item_events` in last 30 days where `category = Trail` |
+| Big-basket full-price buyers | event `purchase_item_events` in last 90 days where `order_revenue_usd > 200` and `is_full_price = true` |
+| Goal race in 8–20 weeks | `goal_race_date` between today+56d and today+140d |
+| Lapsed win-back | `lifecycle_stage = lapsed` AND `discount_sensitivity != full_price` AND `email_contactable` |
+| Close to Elite | `loyalty_tier = Pro` AND `revenue_12m` between 800 and 999 |
+| Top pick on markdown (email) | `rec_is_on_markdown = true` AND `rec_stock_status = in_stock` AND `email_contactable` |
+| Recent purchasers (suppress) | event `purchase_item_events` in last 14 days (blocklist on prospecting syncs) |
+| Email fatigued | `email_contactable` AND `Email Opens (30d) = 0` |
+| Trail runners + rain | event `trigger_events` in last 3 days where `trigger_type = weather_rain` |
 
-| Related table | Cardinality | Join |
-|---|---|---|
-| `customer_profile` | 1:many | `household_id = household_id` (aggregate: Count members, List emails, Max `loyalty_tier`) |
+Connector rules: block `global_suppression = true` everywhere, and `do_not_sell = true` / `paid_media_eligible =
+false` on ad platforms.
 
-Column attributes: `member_count`, `has_kids`, `kids_age_bands`, `household_revenue_12m`, `household_predicted_clv_12m`,
-`any_email_contactable`, `any_paid_media_eligible`, `top_sport`, `city`, `state`, `country`, `home_store_id`.
-
-## 3. Audiences to build in Customer Lake
-
-| Audience | Entity | Conditions |
-|---|---|---|
-| Runners due for new shoes | Customer | `active_shoe_miles >= 400` AND `email_contactable = true` |
-| CloudStride 3 fit-return save | Customer | event `return_events` where `has` `style_name LIKE 'CloudStride 3%'` and `return_reason = too_small` in last 120 days |
-| Goal race in 8–20 weeks | Customer | `goal_race_date` between today+56d and today+140d |
-| High value at risk | Customer | `clv_tier in (platinum, gold)` AND `churn_probability > 0.5` |
-| Lapsed win-back | Customer | `lifecycle_stage = lapsed` AND `discount_sensitivity != full_price` AND `email_contactable` |
-| Sneakerheads | Customer | `drop_hype_score >= 0.5` **but not** audience *Reseller suspects* |
-| Reseller suspects | Customer | `reseller_risk_score >= 0.6` (use as a **connector rule blocklist** for drop syncs) |
-| Back-to-school families | Household | `has_kids = true` AND `any_email_contactable = true` |
-| Close to Elite | Customer | `loyalty_tier = Pro` AND `revenue_12m between 800 and 999` |
-| Lookalike seed | Customer | `predicted_clv_12m` in top 5% AND `paid_media_eligible` |
-| Recent purchasers (suppress) | Customer | event `purchase_events` in last 14 days (use as a blocklist on prospecting syncs) |
-| Bought trail shoes recently | Customer | event `purchase_item_events` in last 30 days where `category = Trail` |
-| Bought a CloudStride 3 | Customer | event `purchase_item_events` in last 180 days where `style_name` contains `CloudStride 3` |
-| CloudStride 3 cart abandoners | Customer | event `digital_product_events` `event_type = add_to_cart` and `style_name` contains `CloudStride 3` in last 7 days, **but not** event `purchase_item_events` same product in last 7 days |
-| Running in an old CloudStride 2 | Customer | event `run_shoe_events` `shoe_name` contains `CloudStride 2` and `shoe_total_miles >= 400` in last 30 days |
-| Top pick on markdown (email) | Customer | `rec_is_on_markdown = true` AND `rec_stock_status = in_stock` AND `email_contactable`; map `rec_product_name`, `rec_image_url`, `rec_product_url` in the sync |
-| Viewed a limited drop | Customer | event `digital_events` `event_type = product_view` in last 7 days where product `is_limited_drop = true` |
-| Recommended item on markdown | Customer | `customer_product_recommendations` product `is_on_markdown = true` AND `stock_status = in_stock` |
-| Email fatigued | Customer | `email_contactable` AND `Email Opens (30d) = 0` |
-| Trail runners + rain | Customer | `top_sport = Trail Running` (the rain-forecast condition is in `gold.trigger_events`) |
-
-Connector rules: block `global_suppression = true` everywhere, `do_not_sell = true` / `paid_media_eligible = false`
-on ad platforms, and *Reseller suspects* on drop-related syncs.
-
-To filter purchases by product (name, category, sport, size ...), use the `purchase_item_events` event table: event
-attributes can only use an event table's own columns, and this view already has the product details on each line.
+Scores such as CLV tier, churn probability, drop hype and reseller risk live in `retail_gold.customer_predictions`,
+which has no `retail_cdp` view yet. Add one to `ddl/04_cdp` (same pattern as `customer_traits`) to use them.

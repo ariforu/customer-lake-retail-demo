@@ -7,13 +7,14 @@ It generates realistic raw data, cleans it, works out which records belong to th
 customer tables that **Customer Lake** uses for audiences and activation. Everything is packaged as a
 Databricks Asset Bundle, so it can be deployed to any workspace.
 
-## The three layers
+## The layers
 
 | Layer | Schema | What's in it |
 |---|---|---|
 | Bronze | `retail_bronze` | 42 raw tables, as they would arrive from each system (stores, website, app, loyalty, email, ads, support, …) |
 | Silver | `retail_silver` | 37 cleaned tables, with every record linked to one customer id |
-| Gold | `retail_gold` | 20 ready-to-use tables and 5 views: the customer view, scores, product feed, journey triggers and the Customer Lake event tables |
+| Gold | `retail_gold` | 20 ready-to-use Delta tables: the customer view, scores, product feed, journey triggers and the Customer Lake event tables |
+| CDP | `retail_cdp` | 14 views Customer Lake points at: 1:1 views over gold tables, plus event views with product details |
 
 `retail_synthetic_truth` holds the generator's "answer key" (which records really belong to whom), used to check
 identity-resolution accuracy. Every gold table and column has a description in Unity Catalog, and every gold
@@ -33,7 +34,7 @@ table uses liquid clustering (customer id, plus the event time for event tables)
 Two jobs. Every step is a notebook with a short "what it does / reads / writes" note at the top.
 
 **1. `strideforge_bronze_setup`** – run once per workspace
-1. Create the bronze, silver and gold tables
+1. Create the bronze, silver and gold tables and the `retail_cdp` views
 2. Generate the fake data into bronze
 3. Check the data and the stories
 
@@ -49,17 +50,20 @@ Two jobs. Every step is a notebook with a short "what it does / reads / writes" 
 | `gold_customer_360` | One row per customer: profile, consent, identifiers, behaviour; identity-resolution stats |
 | `gold_predictions_products` | Simple rule-based scores, top-5 product picks, product feed |
 | `gold_triggers` | Journey triggers (abandoned cart, worn-out shoes, rain on trail runners ...) |
-| `gold_customer_lake` | Household table, purchase line items and 9 event tables for Customer Lake |
+| `gold_customer_lake` | Household table, purchase line items and 9 event tables; checks the Customer Lake rules |
+| `ensure_cdp_views` | Creates the `retail_cdp` views if missing (never replaces them) |
 
 ## Customer Lake
 
-Point one entity at the gold tables:
+Point one entity at **`retail_cdp`**:
 
-| Entity | Profile table (key) | Joined tables |
+| Entity | Profile (key) | Related objects |
 |---|---|---|
-| Retail - StrideForge Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_predictions`; many:1 `household_profile`; 1:many `customer_product_recommendations`, `customer_identity_map`; 13 event tables (`purchase_events`, `return_events`, `digital_events`, `message_engagement_events`, `run_activity_events`, `loyalty_events`, `race_registration_events`, `support_events`, `review_events`, plus 4 views that add product details: `purchase_item_events`, `digital_product_events`, `run_shoe_events`, `return_item_events`); 1:1 view `customer_top_recommendation`; `purchase_line_items` (1:many from `purchase_events`); `product_catalog_enriched` (many:1 on `sku`) |
+| Retail - StrideForge Customer | `customer_profile` (`unified_customer_id`) | 1:1 `customer_consent`, `customer_traits`, `customer_top_recommendation`; event tables `purchase_item_events`, `digital_product_events`, `return_item_events`, `run_shoe_events`, `message_engagement_events`, `loyalty_events`, `race_registration_events`, `support_events`, `review_events`, `trigger_events` |
 
-Audiences are built in Customer Lake, not in gold. Campaign results (opens, clicks, conversions) are measured from the event tables. Exact wizard settings, suggested attributes and example audiences: [docs/customer_lake_setup.md](docs/customer_lake_setup.md).
+The views read the gold tables directly (no view on a view) and are created once, so job runs never break the
+entity. Audiences are built in Customer Lake; campaign results (opens, clicks, purchases) come from the event tables.
+Exact wizard settings, suggested attributes and example audiences: [docs/customer_lake_setup.md](docs/customer_lake_setup.md).
 
 ## Gold data model
 
@@ -90,7 +94,7 @@ Add `--var scale=0.01` for a quick test (15K customers).
 databricks.yml        bundle settings (catalog, schema names, scale, targets)
 resources/            the two job definitions
 src/_params.py        shared catalog/schema widgets
-src/ddl/              create the bronze, silver and gold tables
+src/ddl/              create the bronze, silver and gold tables and the retail_cdp views
 src/generator/        fake-data generator (notebooks + gen/ library; run.py runs it locally via Databricks Connect)
 src/silver/           bronze -> silver notebooks
 src/gold/             silver -> gold notebooks
