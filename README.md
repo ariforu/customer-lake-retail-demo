@@ -97,6 +97,7 @@ Add `--var scale=0.01` for a quick test (15K customers).
 ## Folders
 
 ```
+DESIGN.md             how and why the demo is built (architecture, identity resolution, CDP layer)
 databricks.yml        bundle settings (catalog, schema names, scale, targets)
 resources/            the two job definitions
 src/_params.py        shared catalog/schema widgets
