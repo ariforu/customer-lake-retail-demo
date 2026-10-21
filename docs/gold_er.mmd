@@ -16,6 +16,7 @@ erDiagram
   customer_profile ||--o{ review_events : "reviews"
   customer_profile ||--o{ trigger_events : "journey triggers"
   purchase_events ||--|{ purchase_line_items : "order_id"
+  customer_profile ||--o{ purchase_item_events : "order lines + product (view)"
   purchase_line_items }o--|| product_catalog_enriched : "sku"
   customer_product_recommendations }o--|| product_catalog_enriched : "sku"
   digital_events }o--o| product_catalog_enriched : "sku"
@@ -69,6 +70,12 @@ erDiagram
     string sku PK
     string category
     string stock_status
+  }
+  purchase_item_events {
+    string order_line_id PK
+    timestamp order_ts
+    string style_name
+    string category
   }
   return_events {
     string return_id PK

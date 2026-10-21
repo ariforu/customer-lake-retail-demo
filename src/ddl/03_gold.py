@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Create gold tables
 # MAGIC
-# MAGIC **What it does:** Creates the gold schema and its 20 tables with a description on every table and column and liquid clustering keys. Safe to re-run: on existing tables it only refreshes descriptions and clustering keys.
+# MAGIC **What it does:** Creates the gold schema, its 20 tables and the `purchase_item_events` view with a description on every table and column and liquid clustering keys. Safe to re-run: on existing tables it only refreshes descriptions and clustering keys.
 # MAGIC
 # MAGIC - **Reads:** -
 # MAGIC - **Writes:** `retail_gold` schema and tables
@@ -650,6 +650,51 @@ CREATE TABLE IF NOT EXISTS ${catalog}.${gold}.review_events (
 ) COMMENT 'Customer Lake event table: product reviews (event id review_id, timestamp submitted_at) with rating and AI fit/sentiment. Derived from silver product_reviews + products. Built by job strideforge_medallion, task gold_customer_lake (notebook gold/04_customer_lake).'
 CLUSTER BY (unified_customer_id, submitted_at)
 TBLPROPERTIES ('cdp_activation' = 'true')
+""")
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Step 22 - `purchase_item_events` - Customer Lake event table (view): one row per order line with order and product details
+# MAGIC Created once (`IF NOT EXISTS`) so the view keeps its identity for Customer Lake. To change it, drop it first.
+# COMMAND ----------
+
+run(r"""
+CREATE VIEW IF NOT EXISTS ${catalog}.${gold}.purchase_item_events (
+  order_line_id COMMENT 'Event id: order line id (order_id + "-" + line number).',
+  unified_customer_id COMMENT 'Unified customer id assigned by identity resolution (silver.identity_graph); joins to customer_profile.',
+  order_ts COMMENT 'Event timestamp: when the order was placed.',
+  order_id COMMENT 'Order id; joins to purchase_events.order_id.',
+  channel COMMENT 'Sales channel: web, app or store.',
+  store_id COMMENT 'Store (POS) or pickup store (BOPIS).',
+  country COMMENT 'Order country derived from currency: US, UK, DE, CA.',
+  fulfillment_type COMMENT 'ship, bopis, ship_from_store or in_store.',
+  promo_code COMMENT 'Promo / affiliate code used on the order.',
+  utm_source COMMENT 'UTM source of the order (google, meta, tiktok, youtube, email, sms, braze, affiliate, referral); null = direct.',
+  utm_campaign COMMENT 'UTM campaign (campaign_id for owned/paid campaigns, promo code for affiliates).',
+  sku COMMENT 'SKU bought = style_id-colorway-size (e.g. RUN0123-01-105).',
+  style_id COMMENT 'Product style id (e.g. RUN0123).',
+  style_name COMMENT 'Product name (e.g. CloudStride 3 Men\'s).',
+  category COMMENT 'Product category (Running, Trail, Basketball, Training, Lifestyle, Football, Kids Footwear, Apparel, Kids Apparel, Accessories).',
+  sport COMMENT 'Sport of the product (Running, Trail Running, Basketball, Training, Lifestyle, Football, Multi-Sport).',
+  gender COMMENT 'Product gender: Men, Women, Unisex or Kids.',
+  colorway COMMENT 'Colorway name (e.g. Core Black / Cloud White).',
+  size COMMENT 'Size bought (US numeric, kids C/Y, alpha XS-XXL, OS).',
+  is_limited_drop COMMENT 'Product is a limited collab drop.',
+  msrp COMMENT 'Manufacturer\'s suggested retail price (USD).',
+  unit_price_usd COMMENT 'Price paid per unit (USD).',
+  discount_usd COMMENT 'Discount on the line (USD).',
+  revenue_usd COMMENT 'Net line revenue after discount (USD).'
+)
+COMMENT 'Customer Lake event table (view): one row per order line of an identified order (event id order_line_id, timestamp order_ts), flattened with order details (channel, store, promo, UTMs) and product details (name, category, sport, gender, colorway, size, limited drop). Use it to filter purchases by product name or attributes. View over gold purchase_line_items + purchase_events + product_catalog_enriched; created by the gold DDL notebook (ddl/03_gold).'
+TBLPROPERTIES ('cdp_activation' = 'true')
+AS
+SELECT li.order_line_id, li.unified_customer_id, pe.order_ts, li.order_id, pe.channel, pe.store_id, pe.country,
+       pe.fulfillment_type, pe.promo_code, pe.utm_source, pe.utm_campaign,
+       li.sku, pc.style_id, pc.style_name, pc.category, pc.sport, pc.gender, pc.colorway, pc.size, pc.is_limited_drop, pc.msrp,
+       li.unit_price_usd, li.discount_usd, li.revenue_usd
+FROM ${catalog}.${gold}.purchase_line_items li
+JOIN ${catalog}.${gold}.purchase_events pe USING (order_id)
+LEFT JOIN ${catalog}.${gold}.product_catalog_enriched pc USING (sku)
 """)
 # COMMAND ----------
 

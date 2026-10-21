@@ -36,6 +36,7 @@ Every table has a primary key and a description on each column.
 | `customer_identity_map` | 1:many | aggregate with `Count Distinct` / `List` on `id_type` |
 | `purchase_events` | **event table** | event ID `order_id`, timestamp `order_ts` |
 | `purchase_line_items` | 1:many **from `purchase_events`** | join `order_id = order_id` (one row per order line, with `sku`) |
+| `purchase_item_events` | **event table** (view) | event ID `order_line_id`, timestamp `order_ts`; one row per order line with order **and product** details: the easiest way to filter purchases by product name |
 | `return_events` | **event table** | event ID `return_id`, timestamp `return_ts` |
 | `digital_events` | **event table** | event ID `event_id`, timestamp `event_ts` |
 | `message_engagement_events` | **event table** | event ID `message_event_id`, timestamp `event_ts` |
@@ -65,7 +66,8 @@ carry a `sku`, each as **many:1** on `sku = sku`:
   - `Email Opens (30d)` = Count of `message_engagement_events.message_event_id` where `event_type = 'open'`, last 30 days
   - `Run Miles (30d)` = Sum of `run_activity_events.distance_miles`, last 30 days
   - `Recommended SKUs` = List of `customer_product_recommendations.sku`
-- **Event attributes** (for event filters): `purchase_events.channel`, `.categories`, `.has_running_shoes`,
+- **Event attributes** (for event filters): `purchase_item_events.style_name`, `.category`, `.sport`, `.gender`,
+  `.size`, `.is_limited_drop`, `.revenue_usd`; `purchase_events.channel`, `.categories`, `.has_running_shoes`,
   `.has_cloudstride_3`, `.revenue_usd`; `return_events.return_reason`, `.is_fit_related`, `.style_name`;
   `digital_events.event_type`, `.category`, `.sku`; `message_engagement_events.event_type`, `.channel`, `.campaign_id`;
   `run_activity_events.activity_type`, `.distance_miles`; `race_registration_events.event_type`, `.event_date`;
@@ -103,7 +105,8 @@ Column attributes: `member_count`, `has_kids`, `kids_age_bands`, `household_reve
 | Close to Elite | Customer | `loyalty_tier = Pro` AND `revenue_12m between 800 and 999` |
 | Lookalike seed | Customer | `predicted_clv_12m` in top 5% AND `paid_media_eligible` |
 | Recent purchasers (suppress) | Customer | event `purchase_events` in last 14 days (use as a blocklist on prospecting syncs) |
-| Bought trail shoes recently | Customer | event `purchase_events` in last 30 days where line item product `category = Trail` |
+| Bought trail shoes recently | Customer | event `purchase_item_events` in last 30 days where `category = Trail` |
+| Bought a CloudStride 3 | Customer | event `purchase_item_events` in last 180 days where `style_name` contains `CloudStride 3` |
 | Viewed a limited drop | Customer | event `digital_events` `event_type = product_view` in last 7 days where product `is_limited_drop = true` |
 | Recommended item on markdown | Customer | `customer_product_recommendations` product `is_on_markdown = true` AND `stock_status = in_stock` |
 | Email fatigued | Customer | `email_contactable` AND `Email Opens (30d) = 0` |
@@ -112,6 +115,5 @@ Column attributes: `member_count`, `has_kids`, `kids_age_bands`, `household_reve
 Connector rules: block `global_suppression = true` everywhere, `do_not_sell = true` / `paid_media_eligible = false`
 on ad platforms, and *Reseller suspects* on drop-related syncs.
 
-Filtering purchases on line-item product fields relies on event filters reaching through `purchase_events` →
-`purchase_line_items` → `product_catalog_enriched`. If the audience builder does not offer those fields, use the
-product arrays on `purchase_events` (`categories`, `sports`, `style_names`) instead.
+To filter purchases by product (name, category, sport, size ...), use the `purchase_item_events` event table: event
+attributes can only use an event table's own columns, and this view already has the product details on each line.

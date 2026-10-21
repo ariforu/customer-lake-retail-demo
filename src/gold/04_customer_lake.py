@@ -186,7 +186,8 @@ EVENTS = {"purchase_events": ("order_id", "order_ts"), "return_events": ("return
           "digital_events": ("event_id", "event_ts"), "message_engagement_events": ("message_event_id", "event_ts"),
           "run_activity_events": ("activity_id", "start_ts"), "loyalty_events": ("ledger_id", "activity_ts"),
           "race_registration_events": ("registration_id", "registered_at"), "support_events": ("ticket_id", "created_at"),
-          "review_events": ("review_id", "submitted_at")}
+          "review_events": ("review_id", "submitted_at"),
+          "purchase_item_events": ("order_line_id", "order_ts")}
 problems = []
 for t, (eid, ts) in EVENTS.items():
     df = spark.table(f"{G}.{t}")

@@ -11,7 +11,7 @@ flowchart LR
     ONE["<b>1 : 1</b><br/>customer_consent<br/>customer_traits<br/>customer_predictions"]:::cdp
     HH["<b>many : 1</b><br/>household_profile"]:::cdp
     MANY["<b>1 : many</b><br/>customer_identity_map<br/>customer_product_recommendations"]:::cdp
-    EV["<b>Event tables</b>  (event id + timestamp)<br/>purchase_events · return_events<br/>digital_events · message_engagement_events<br/>run_activity_events · loyalty_events<br/>race_registration_events · support_events<br/>review_events"]:::evt
+    EV["<b>Event tables</b>  (event id + timestamp)<br/>purchase_events · purchase_item_events (view)<br/>return_events · digital_events<br/>message_engagement_events · run_activity_events<br/>loyalty_events<br/>race_registration_events<br/>support_events · review_events"]:::evt
     LINES["<b>purchase_line_items</b><br/><i>1 : many from purchase_events</i>"]:::cdp
     CATALOG["<b>product_catalog_enriched</b><br/><i>many : 1 on sku</i>"]:::cdp
 
