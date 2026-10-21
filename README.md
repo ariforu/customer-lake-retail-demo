@@ -109,5 +109,7 @@ docs/                 diagrams and the Customer Lake setup guide
 
 ## Demo video
 
+[![StrideForge CDP demo video](https://img.youtube.com/vi/zxey3i30e5o/0.jpg)](https://youtu.be/zxey3i30e5o)
+
 [Watch on YouTube](https://youtu.be/zxey3i30e5o) – shows how to create a Customer Lake campaign agent that builds
 audiences in natural language on the StrideForge CDP data.
