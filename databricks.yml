@@ -20,6 +20,12 @@ variables:
   truth_schema:
     description: Generator scratch tables + identity answer key
     default: retail_synthetic_truth
+  cleanroom_schema:
+    description: Clean room module - match keys shared into the Greenstar clean room + saved enrichment output
+    default: retail_cleanroom
+  clean_room_name:
+    description: Clean room module - the Databricks clean room StrideForge creates with Greenstar Consumer Data
+    default: strideforge_greenstar_enrichment
   scale:
     description: Bronze generator scale (1.0 = 1.5M customers, ~274M rows; 0.01 = quick smoke test)
     default: "1.0"

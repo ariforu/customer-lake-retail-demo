@@ -38,6 +38,7 @@ working.
 | `customer_consent` | 1:1 | | Consent flags per channel (also use in connector rules) |
 | `customer_traits` | 1:1 | | RFM, lifecycle, top category/sport, spend, returns, run miles, goal race |
 | `customer_top_recommendation` | 1:1 | | #1 recommended product: name, price, markdown, stock, image URL, product URL |
+| `customer_enrichment` *(clean room module, optional)* | 1:1 | | Greenstar Consumer Data enrichment: generation, income band, homeowner, occupation category, top interests, life stage, best phone/age band with `*_source` (DESIGN.md section 12) |
 | `purchase_item_events` | **event table** | `order_line_id` / `order_ts` | One row per order line: product name, category, sport, size, line and **order** totals, promo, payment, UTMs |
 | `digital_product_events` | **event table** | `event_id` / `event_ts` | Web/app events with product name, sport, size, limited drop, today's price/markdown/stock |
 | `return_item_events` | **event table** | `return_id` / `return_ts` | Returns with product, size, reason, original order channel, refund (USD) |
@@ -62,6 +63,8 @@ of `order_id` (an event count counts lines).
     `days_since_last_order`, `order_count_12m`, `revenue_12m`, `return_rate`, `fit_return_count`, `run_miles_90d`,
     `goal_race_date`
   - `customer_top_recommendation`: all columns (map `rec_product_name`, `rec_image_url`, `rec_product_url` in syncs)
+  - `customer_enrichment` (if the clean room module is deployed): `greenstar_matched`, `generation`, `generation_source`,
+    `income_band`, `homeowner`, `occupation_category`, `life_stage`, `has_children`, `phone_source`, `age_band_source`
 - **Event attributes** (+ New attribute → Create an event attribute). Event filters can only use an event table's own
   columns, so create the ones your audiences need:
   - `purchase_item_events`: `style_name`, `category`, `sport`, `size`, `is_limited_drop`, `order_revenue_usd`,
@@ -94,6 +97,28 @@ of `order_id` (an event count counts lines).
 | Recent purchasers (suppress) | event `purchase_item_events` in last 14 days (blocklist on prospecting syncs) |
 | Email fatigued | `email_contactable` AND `Email Opens (30d) = 0` |
 | Trail runners + rain | event `trigger_events` in last 3 days where `trigger_type = weather_rain` |
+
+### Clean room enrichment audiences (optional module, DESIGN.md section 12)
+
+Setup (done on `fevm-vijay`, 2026-11-05):
+1. **Manage relationships → Edit relationships → Grant tables**: grant CustomerLake read access to
+   `retail_cdp.customer_enrichment` (it isn't visible in the catalog list until granted).
+2. On the new node, **Add relationship** → `customer_profile`, cardinality **1:1**, `unified_customer_id =
+   unified_customer_id` → **Save join** → **Save**.
+3. **Tables → customer_enrichment**, tick the columns and **Create attributes**: `greenstar_matched`, `generation`,
+   `generation_source`, `income_band`, `homeowner`, `occupation_category`, `top_interests`, `life_stage`,
+   `has_children`, `phone_source`, `age_band_source`. Also create `lifecycle_stage` from `customer_traits`.
+
+| Audience | Conditions (Match all) | Size |
+|---|---|---|
+| Greenstar – Gen Z Trail Explorers | `Generation (Customer Enrichment)` equals `Gen Z`; `Top Interests (Customer Enrichment)` contains `Trail Running`; `Email Contactable` = True | 655 |
+| Greenstar – Young Families: Kids' Running Gear | `Life Stage (Customer Enrichment)` equals `Young Family`; `Email Contactable` = True; Or-group: `Kids Age Bands` is empty **or** does not exist | 1,025 |
+| Greenstar – Lapsed: Paid Media Win-back | `Lifecycle Stage (Customer Traits)` equals `lapsed`; `Paid Media Eligible` = True; `Greenstar Matched (Customer Enrichment)` = True | 4,443 (1,244 matchable on ad platforms only through the Greenstar phone) |
+
+Gotchas: new audiences default to **Match any condition** (switch to Match all) and new boolean conditions default
+to **False**. For list attributes, type the single value (`Trail Running`) and press Enter; the suggestions are whole
+arrays. "is empty" does not include null lists, so pair it with "does not exist". Greenstar phones carry no SMS
+consent: use them as a paid-media match key, never for SMS.
 
 Connector rules: block `global_suppression = true` everywhere, and `do_not_sell = true` / `paid_media_eligible =
 false` on ad platforms.

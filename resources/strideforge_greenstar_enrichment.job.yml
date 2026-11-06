@@ -1,0 +1,46 @@
+resources:
+  jobs:
+    strideforge_greenstar_enrichment:
+      name: strideforge_greenstar_enrichment
+      description: >
+        Clean room module: refreshes the hashed-email match keys StrideForge shares into the Greenstar Consumer Data
+        clean room, runs Greenstar's approved enrichment notebook in the clean room, and saves the output to
+        retail_cleanroom.customer_enrichment (read by the retail_cdp.customer_enrichment view for Customer Lake).
+        Requires the clean room to exist (src/cleanroom/scripts/setup_clean_room.py).
+      tags:
+        project: strideforge_cdp
+        module: cleanroom
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: ddl
+          notebook_task:
+            notebook_path: ../src/cleanroom/target/00_ddl.py
+            base_parameters: &params
+              catalog: ${var.catalog}
+              gold: ${var.gold_schema}
+              cdp: ${var.cdp_schema}
+              cleanroom: ${var.cleanroom_schema}
+
+        - task_key: refresh_match_keys
+          depends_on: [{task_key: ddl}]
+          notebook_task:
+            notebook_path: ../src/cleanroom/target/01_refresh_match_keys.py
+            base_parameters: *params
+
+        - task_key: enrich
+          depends_on: [{task_key: refresh_match_keys}]
+          clean_rooms_notebook_task:
+            clean_room_name: ${var.clean_room_name}
+            notebook_name: greenstar_enrich_customers
+
+        - task_key: save_enrichment
+          depends_on: [{task_key: enrich}]
+          notebook_task:
+            notebook_path: ../src/cleanroom/target/02_save_enrichment.py
+            base_parameters:
+              catalog: ${var.catalog}
+              gold: ${var.gold_schema}
+              cdp: ${var.cdp_schema}
+              cleanroom: ${var.cleanroom_schema}
+              cr_output_catalog: "{{tasks.enrich.output.catalog_name}}"
+              cr_output_schema: "{{tasks.enrich.output.schema_name}}"
