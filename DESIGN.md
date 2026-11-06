@@ -146,6 +146,8 @@ Everything is a notebook task in a Databricks Asset Bundle (`databricks.yml`, `r
 - **`strideforge_medallion`** (daily, schedule paused): DDL checks → silver (functions, reference, identity
   resolution, then the domains in parallel) → gold (Customer 360 → scores and products → triggers and Customer Lake
   tables). `ensure_cdp_views` runs alongside.
+- **`strideforge_greenstar_enrichment`** (optional module, on demand): clean room enrichment with a consumer data
+  provider. See section 12.
 
 | Setting | Variables |
 |---|---|
@@ -184,6 +186,7 @@ databricks.yml                      bundle: name, variables, dev/prod targets
 resources/
   strideforge_bronze_setup.job.yml  one-time job: DDL + generator + validation
   strideforge_medallion.job.yml     daily job: bronze -> silver -> gold, CDP views
+  strideforge_greenstar_enrichment.job.yml  clean room module job (section 12)
 src/
   _params.py                        shared widgets (catalog, schemas) + run() SQL helper
   ddl/01_bronze.py .. 04_cdp.py     schemas, tables, views (idempotent)
@@ -194,6 +197,7 @@ src/
     run.py, sf_session.py           local runner + Spark session handling
   silver/00_functions.py .. 08_*    bronze -> silver notebooks
   gold/01_customer_360.py .. 04_*   silver -> gold notebooks
+  cleanroom/                        optional clean room enrichment module (section 12)
 docs/                               Customer Lake setup guide, diagrams (.mmd + .png)
 ```
 
@@ -299,3 +303,185 @@ docs/                               Customer Lake setup guide, diagrams (.mmd + 
 - Customer Lake (Beta) has no bundle or API support for entities and attributes, so they are set up in the UI
   following `docs/customer_lake_setup.md`.
 - Changing a `retail_cdp` view means dropping it and re-pointing the entity, so plan view changes.
+
+## 12. Module: clean room enrichment (Greenstar Consumer Data)
+
+An optional, self-contained module. It shows how a **Databricks Clean Room** lets StrideForge enrich its customer
+profiles with a third-party consumer data provider's file, where neither side sees the other's raw data. The
+provider, **Greenstar Consumer Data**, is fictional; it stands in for a commercial consumer-data product. Nothing
+outside `src/cleanroom/`, `resources/strideforge_greenstar_enrichment.job.yml` and two bundle variables changes, and
+the existing jobs and `retail_cdp` views are untouched.
+
+### 12.1 What it shows
+
+1. **Detailed data in, summaries out.** Greenstar holds exact date of birth, income, home value, occupation title,
+   20 interest scores, marital status and number of children. StrideForge receives only summary fields:
+   `generation` (Gen Z, Millennial, Gen X, Baby Boomer, ...), `income_band`, `homeowner`, `occupation_category`,
+   `top_interests` (top 3) and `life_stage`.
+2. **Gap filling.** Where StrideForge has no phone or birth date, Greenstar's phone (as-is) and age band fill it.
+   First-party values always win.
+3. **Customer Lake.** The result is a 1:1 related object on the existing StrideForge Customer entity, so audiences
+   like "Millennial homeowners whose phone came from Greenstar" work.
+
+### 12.2 Parties and workspaces
+
+| | StrideForge (retailer) | Greenstar Consumer Data (provider) |
+|---|---|---|
+| Workspace (CLI profile) | `fevm-vijay` | `partner-demo-catalog` |
+| Metastore | `aws:us-east-1:c0da88f1-…` | `aws:us-east-1:9bfdb312-…` |
+| Clean room alias | `strideforge` | `greenstar` |
+| Role | Creates and owns the room; **runs** the notebooks; receives the output | Shares its table; **writes** the notebooks |
+| Shares | `vijay_catalog.retail_cleanroom.cr_match_keys` | `greenstar_demo.consumer.person_attributes` |
+
+Clean room: `strideforge_greenstar_enrichment` (central room on AWS us-east-1, **restricted internet egress**),
+output catalog `strideforge_greenstar_enrichment_output` on the StrideForge side.
+
+```
+ StrideForge (fevm-vijay)                    clean room (serverless, no internet)            Greenstar (partner-demo-catalog)
+ retail_gold.customer_profile                                                                  consumer.person_attributes
+   + customer_consent                                                                          (50K people, detailed)
+        |  01_refresh_match_keys                                                                       |
+        v                                                                                              |
+ retail_cleanroom.cr_match_keys  ----share---->  greenstar_enrich_customers  <----share--------------- +
+ (hashed email, country, gap flags)              (Greenstar's notebook, run by StrideForge)
+                                                          |
+                                                          v
+                                  <clean room>_output.output_schema_<run>.customer_enrichment (30 days)
+                                                          |  02_save_enrichment
+                                                          v
+                                  retail_cleanroom.customer_enrichment  -->  retail_cdp.customer_enrichment  -->  Customer Lake
+```
+
+### 12.3 Data
+
+**Greenstar `consumer.person_attributes`** (50,000 rows, synthetic, deterministic from the email hash):
+`person_id`, `email_sha256`, `country`, `date_of_birth`, `phone_number` (E.164, country formats), `household_income`,
+`home_ownership`, `home_value`, `occupation_title`, `education`, `marital_status`, `num_children`,
+`interest_scores` (MAP of 20 affinities), `last_verified_date`.
+
+| Segment | Rows | Purpose |
+|---|---|---|
+| StrideForge customers with a phone or birth-date gap | 15,000 | Shows gap filling |
+| StrideForge customers with no gap | 5,000 | Shows "first-party wins"; 5% have a date of birth 1–3 years off, to show conflicts |
+| People StrideForge doesn't know | 30,000 | Realistic match rate (~2% of StrideForge's shared customers, 40% of Greenstar's file) |
+
+`scripts/setup_provider.py` builds it: it samples the matching customers on the StrideForge side (hash, country and
+birth date only), writes them to a temporary `greenstar_demo.staging` schema, generates every attribute in SQL
+(`sql/greenstar_person_attributes.sql`) and drops the staging schema. This copy step is demo staging only; a real
+provider already has its own file.
+
+**StrideForge `retail_cleanroom.cr_match_keys`** (~1.03M rows): `unified_customer_id`, `email_sha256`
+(SHA-256 of the lower-cased, trimmed email), `country`, `has_phone`, `has_birth_date`. Only customers with
+`personalization_profiling` consent who are not globally suppressed. Emails shared by two customers are left out so
+a match maps to exactly one customer.
+
+**Output `customer_enrichment`** (one row per matched customer): `generation`, `age_band` (only when StrideForge
+has no birth date), `phone_e164` (only when StrideForge has no phone), `income_band`, `homeowner`,
+`occupation_category`, `top_interests`, `has_children`, `life_stage`, `fields_enriched`, `enriched_at`.
+
+| Greenstar detail | Summary rule (in Greenstar's notebook) |
+|---|---|
+| `date_of_birth` | Generation by birth year: Gen Alpha 2013+, Gen Z 1997–2012, Millennial 1981–1996, Gen X 1965–1980, Baby Boomer 1946–1964, Silent before 1946. Age band in StrideForge's bands (16-24 … 55+) |
+| `household_income` | `<50K`, `50-100K`, `100-150K`, `150K+` (USD-equivalent) |
+| `home_ownership`, `home_value` | `homeowner` boolean |
+| `occupation_title` (20 titles) | 7 categories (Professional, Healthcare & Education, Skilled Trades, Service & Retail, Business Owner, Student, Retired) |
+| `interest_scores` | Up to 3 labels with affinity ≥ 0.6, strongest first |
+| age, `marital_status`, `num_children` | `has_children`; `life_stage` (Retiree 67+, Empty Nester 55+, Young/Established Family, Couple No Kids, Young Single, Single Adult) |
+
+**Customer Lake view `retail_cdp.customer_enrichment`**: one row per customer (1:1 with `customer_profile`), with
+`greenstar_matched`, best `phone_e164` / `age_band` / `generation` plus `*_source` (`first_party` or `greenstar`),
+`generation_conflict`, and the Greenstar summaries. Generation is computed from StrideForge's own birth date when it
+has one.
+
+First full run: 20,000 matched; phone added for 6,090; age band and generation added for 11,829; 36 generation
+conflicts (first-party kept).
+
+### 12.4 Privacy controls
+
+- **Hashed match key only.** StrideForge shares a SHA-256 email hash, country and two gap flags; no names, raw
+  emails, phones or birth dates.
+- **Consent gate.** Only customers who allow profiling (and are not suppressed) are shared.
+- **Summaries, not records.** Greenstar's notebook decides what leaves the room. Exact date of birth, income, home
+  value, occupation title, interest scores and Greenstar's `person_id` never leave.
+- **Minimum match guard.** The notebook refuses to run with fewer than 100 matches, so a tiny list can't be used to
+  look up individuals.
+- **Approval.** Every notebook version needs approval from all collaborators except the uploader. The room's default
+  auto-approval rule approves, on StrideForge's behalf, Greenstar notebooks that only StrideForge runs (the output
+  only reaches StrideForge). Greenstar approves by uploading. Any change creates a new version that must be approved
+  again.
+- **Output goes only to the runner.** Greenstar never sees which customers matched or the results.
+- **No internet egress** from clean room compute (`RESTRICTED_ACCESS`, fixed at creation).
+
+### 12.5 Running it
+
+```
+# once: provider data (partner-demo-catalog), then the clean room
+python3 src/cleanroom/scripts/setup_provider.py
+python3 src/cleanroom/scripts/setup_clean_room.py --step create      # room + output catalog
+python3 src/cleanroom/scripts/setup_clean_room.py --step notebooks   # Greenstar uploads its notebooks
+databricks bundle deploy -t prod --profile fevm-vijay --var catalog=vijay_catalog
+databricks bundle run strideforge_greenstar_enrichment --only ddl,refresh_match_keys -t prod --profile fevm-vijay --var catalog=vijay_catalog
+python3 src/cleanroom/scripts/setup_clean_room.py --step tables      # both parties share their table
+python3 src/cleanroom/scripts/setup_clean_room.py --step status
+
+# every run (~3-4 minutes)
+databricks bundle run strideforge_greenstar_enrichment -t prod --profile fevm-vijay --var catalog=vijay_catalog
+```
+
+Job `strideforge_greenstar_enrichment`: `ddl` (`target/00_ddl`) → `refresh_match_keys` → `enrich` (**clean room
+notebook task**, `greenstar_enrich_customers`) → `save_enrichment`, which reads the run's output schema through
+`{{tasks.enrich.output.catalog_name}}` / `{{tasks.enrich.output.schema_name}}`.
+
+The order matters because the job definition references the room and its notebook: the room and the notebook must
+exist before `bundle deploy`, and `cr_match_keys` must exist before StrideForge can share it.
+
+Demo script: `docs/cleanroom_demo_script.md` (also published as a Google Doc).
+
+### 12.6 Files
+
+```
+src/cleanroom/
+  scripts/_dbsql.py                     local helper: SQL and CLI calls through the Databricks CLI profile
+  scripts/setup_provider.py             one-time: Greenstar data on the provider workspace
+  scripts/setup_clean_room.py           one-time: room, output catalog, shared tables, notebooks, approvals
+  sql/greenstar_person_attributes.sql   provider table DDL + synthetic generation
+  clean_room_notebooks/                 Greenstar's notebooks (uploaded into the room by the provider)
+    greenstar_validate_access.py        counts on both sides (storage/access smoke test)
+    greenstar_enrich_customers.py       match + summarise
+  target/                               StrideForge notebooks (bundle job tasks)
+    _cr_params.py                       adds the cleanroom schema + output widgets to ../../_params
+    00_ddl.py                           retail_cleanroom schema/tables + retail_cdp.customer_enrichment view
+    01_refresh_match_keys.py            consented hashed-email keys
+    02_save_enrichment.py               copy the run output (expires in 30 days) into a stable table
+resources/strideforge_greenstar_enrichment.job.yml
+```
+
+### 12.7 Decisions
+
+| Decision | Chosen | Rejected / why |
+|---|---|---|
+| Story | Data enrichment from a consumer data provider | Retail media audience overlap / campaign lift; co-marketing with a race organizer. Enrichment best shows detailed-to-summary rules |
+| Provider identity | Fictional "Greenstar Consumer Data"; no real provider named in tables or workspace objects | Using the real product's name |
+| Workspaces | `partner-demo-catalog` (provider) and `fevm-vijay` (StrideForge) | Clean rooms need different metastores, which these are. Same region is not required (collaborators can be on any cloud or region) |
+| Match key | SHA-256 of the normalised email only | Hashed phone as a fallback (awkward when phone is also an output); fuzzy name + postal code (puts raw PII in the room) |
+| Volume | 50K provider rows (15K gap, 5K full, 30K unmatched) | 500K: slower runs for no extra story. Small enough for interactive runs |
+| Outputs | Phone as-is (gap only) + 6 summaries + generation/age band | A smaller set (generation, phone, income band, life stage) |
+| Who creates the room | StrideForge (retailer-led, owns the room and egress policy) | Greenstar-led: doesn't avoid StrideForge needing `CREATE CLEAN ROOM` anyway (needed to get a sharing identifier) |
+| Who writes / runs the notebook | Greenstar writes, StrideForge runs | StrideForge writing it would let the retailer write code that extracts raw provider data |
+| Shared StrideForge object | A table (`cr_match_keys`) refreshed with `INSERT OVERWRITE` | Sharing `customer_profile` (far too much); a view (works, but a table keeps the clean room asset simple and its identity stable) |
+| Consent | Share only `personalization_profiling` customers who are not suppressed | Sharing everyone with an email |
+| Customer Lake | New 1:1 view `retail_cdp.customer_enrichment`, one row per customer, first-party wins, `*_source` columns | Changing `retail_cdp.customer_profile` (breaks the 1:1 pass-through rule and needs a view migration) |
+| Output persistence | Copy each run into `retail_cleanroom.customer_enrichment` (full snapshot) | Pointing Customer Lake at output tables: they are per-run schemas and expire after 30 days |
+| Packaging | Separate module: setup scripts + bundle job + UI demo script | UI-only (not repeatable). Bundles can't manage clean rooms, so creation is scripted with the CLI |
+| Approval | Keep the room's default auto-approval rules | Deleting them for a manual approval moment on stage |
+| Egress | `RESTRICTED_ACCESS` (no internet from clean room compute) | Full access: nothing in the notebooks needs the internet |
+| Permission | Time-boxed `CREATE CLEAN ROOM` grant on the FEVM us-east-1 metastore (FEVM "Clean Room Collaboration", 5 days) | The room keeps working after the grant expires; creating a new room needs a new grant |
+| Network | Fine as is: FEVM's VPN-only IP access list protects the workspace UI/API, not Delta Sharing or clean room compute. `vijay_catalog` is on a customer S3 bucket; `greenstar_validate_access` proved clean room compute can read it | — |
+
+### 12.8 Limitations
+
+- The clean room and its assets are created by script, not by the bundle (no bundle resource for clean rooms yet).
+- Greenstar's attributes are synthetic and uncorrelated with StrideForge behaviour, apart from a running and fitness
+  interest boost for matched customers.
+- `retail_cleanroom.customer_enrichment` is a full snapshot per run; customers who stop matching lose their enrichment.
+- Output tables in the clean room output catalog expire after 30 days; the saved copy does not.

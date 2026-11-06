@@ -38,6 +38,7 @@ working.
 | `customer_consent` | 1:1 | | Consent flags per channel (also use in connector rules) |
 | `customer_traits` | 1:1 | | RFM, lifecycle, top category/sport, spend, returns, run miles, goal race |
 | `customer_top_recommendation` | 1:1 | | #1 recommended product: name, price, markdown, stock, image URL, product URL |
+| `customer_enrichment` *(clean room module, optional)* | 1:1 | | Greenstar Consumer Data enrichment: generation, income band, homeowner, occupation category, top interests, life stage, best phone/age band with `*_source` (DESIGN.md section 12) |
 | `purchase_item_events` | **event table** | `order_line_id` / `order_ts` | One row per order line: product name, category, sport, size, line and **order** totals, promo, payment, UTMs |
 | `digital_product_events` | **event table** | `event_id` / `event_ts` | Web/app events with product name, sport, size, limited drop, today's price/markdown/stock |
 | `return_item_events` | **event table** | `return_id` / `return_ts` | Returns with product, size, reason, original order channel, refund (USD) |
@@ -62,6 +63,8 @@ of `order_id` (an event count counts lines).
     `days_since_last_order`, `order_count_12m`, `revenue_12m`, `return_rate`, `fit_return_count`, `run_miles_90d`,
     `goal_race_date`
   - `customer_top_recommendation`: all columns (map `rec_product_name`, `rec_image_url`, `rec_product_url` in syncs)
+  - `customer_enrichment` (if the clean room module is deployed): `greenstar_matched`, `generation`, `generation_source`,
+    `income_band`, `homeowner`, `occupation_category`, `life_stage`, `has_children`, `phone_source`, `age_band_source`
 - **Event attributes** (+ New attribute → Create an event attribute). Event filters can only use an event table's own
   columns, so create the ones your audiences need:
   - `purchase_item_events`: `style_name`, `category`, `sport`, `size`, `is_limited_drop`, `order_revenue_usd`,

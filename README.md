@@ -94,17 +94,27 @@ databricks bundle run strideforge_medallion   -t prod --profile <profile> --var 
 
 Add `--var scale=0.01` for a quick test (15K customers).
 
+## Optional module: clean room enrichment
+
+A Databricks Clean Room between StrideForge and a fictional consumer data provider, **Greenstar Consumer Data**,
+on a second workspace. Matching on hashed email, Greenstar's notebook turns detailed data (exact date of birth,
+income, occupation, interest scores) into summaries (generation, income band, life stage, top interests) and fills
+missing phone numbers. Results land in `retail_cdp.customer_enrichment` for Customer Lake. Design and setup:
+[DESIGN.md section 12](DESIGN.md#12-module-clean-room-enrichment-greenstar-consumer-data). 5-minute demo:
+[docs/cleanroom_demo_script.md](docs/cleanroom_demo_script.md).
+
 ## Folders
 
 ```
 DESIGN.md             how and why the demo is built (architecture, identity resolution, CDP layer)
 databricks.yml        bundle settings (catalog, schema names, scale, targets)
-resources/            the two job definitions
+resources/            the job definitions (two core jobs + the optional clean room job)
 src/_params.py        shared catalog/schema widgets
 src/ddl/              create the bronze, silver and gold tables and the retail_cdp views
 src/generator/        fake-data generator (notebooks + gen/ library; run.py runs it locally via Databricks Connect)
 src/silver/           bronze -> silver notebooks
 src/gold/             silver -> gold notebooks
+src/cleanroom/        optional module: clean room enrichment with a consumer data provider (DESIGN.md section 12)
 docs/                 diagrams and the Customer Lake setup guide
 ```
 
