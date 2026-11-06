@@ -437,7 +437,26 @@ exist before `bundle deploy`, and `cr_match_keys` must exist before StrideForge 
 
 Demo script: `docs/cleanroom_demo_script.md`, also published as a [Google Doc](https://docs.google.com/document/d/1sNyznAOcO2mrqVWCmt65TbG6dOEEv-O9r03sqtqQCmc/edit) (Databricks only).
 
-### 12.6 Files
+### 12.6 Customer Lake audiences
+
+`retail_cdp.customer_enrichment` is attached to the **StrideForge Shoe Company Customer** entity as a 1:1 related
+table (after granting the CustomerLake app read access to that one view), with 11 column attributes plus
+`lifecycle_stage` from `customer_traits`. Three audiences, each combining Greenstar summaries with first-party data
+and a consent gate (steps and exact conditions in `docs/customer_lake_setup.md`):
+
+| Audience | Greenstar input | First-party input | Size |
+|---|---|---|---|
+| Greenstar – Gen Z Trail Explorers *(in the demo script)* | generation (from date of birth), top interests (from 20 scores) | email consent | 655 |
+| Greenstar – Young Families: Kids' Running Gear | life stage | no kids' sizes on record; email consent | 1,025 |
+| Greenstar – Lapsed: Paid Media Win-back | matched (phone as extra match key) | lifecycle stage `lapsed`; paid-media eligibility | 4,443 |
+
+All three sizes in Customer Lake equal the SQL counts on the same view.
+
+**Finding: licensed phones are not SMS-reachable.** None of the 6,090 customers who got a Greenstar phone have SMS
+consent (StrideForge only captures SMS opt-in alongside a phone it collected). The phone is used as an additional
+hashed match key for ad platforms where `paid_media_eligible`, not for SMS (TCPA/GDPR need the person's own opt-in).
+
+### 12.7 Files
 
 ```
 src/cleanroom/
@@ -456,7 +475,7 @@ src/cleanroom/
 resources/strideforge_greenstar_enrichment.job.yml
 ```
 
-### 12.7 Decisions
+### 12.8 Decisions
 
 | Decision | Chosen | Rejected / why |
 |---|---|---|
@@ -476,9 +495,13 @@ resources/strideforge_greenstar_enrichment.job.yml
 | Approval | Keep the room's default auto-approval rules | Deleting them for a manual approval moment on stage |
 | Egress | `RESTRICTED_ACCESS` (no internet from clean room compute) | Full access: nothing in the notebooks needs the internet |
 | Permission | Time-boxed `CREATE CLEAN ROOM` grant on the FEVM us-east-1 metastore (FEVM "Clean Room Collaboration", 5 days) | The room keeps working after the grant expires; creating a new room needs a new grant |
+| Audiences | 3 audiences in Customer Lake, one per enrichment type, only "Gen Z Trail Explorers" in the 5-minute script | One showcase audience; five or more (too much for 5 minutes) |
+| Consent in audiences | Every audience has a consent gate (email or paid media) | Counting raw matches (bigger numbers, but not usable) |
+| Phone use | Paid-media match key only | SMS (no consent for licensed phones) |
+| Audience build method | Through the Customer Lake UI (no public API in Beta), documented step by step | A separate test entity (would split the demo) |
 | Network | Fine as is: FEVM's VPN-only IP access list protects the workspace UI/API, not Delta Sharing or clean room compute. `vijay_catalog` is on a customer S3 bucket; `greenstar_validate_access` proved clean room compute can read it | — |
 
-### 12.8 Limitations
+### 12.9 Limitations
 
 - The clean room and its assets are created by script, not by the bundle (no bundle resource for clean rooms yet).
 - Greenstar's attributes are synthetic and uncorrelated with StrideForge behaviour, apart from a running and fitness

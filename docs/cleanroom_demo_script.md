@@ -22,7 +22,7 @@ Clean Rooms → `strideforge_greenstar_enrichment`; a SQL editor with `demo_quer
 ![The gap in StrideForge's customer profiles](img/cleanroom/01_gap.png)
 
 **Say:** "StrideForge has 1.5 million identity-resolved customers. About 290,000 have no phone number and 570,000
-have no birth date, so we can't text them or target by generation. A consumer data provider can fill those gaps, but
+have no birth date, so we can't match them on ad platforms by phone or target them by generation. A consumer data provider can fill those gaps, but
 legal won't let us send them our customer list, and they won't send us their raw file."
 
 ## Step 2 – The clean room (75 seconds)
@@ -68,17 +68,24 @@ auto-approval rule covers Greenstar's notebooks that only StrideForge runs, beca
 
 ## Step 4 – The result in Customer Lake (75 seconds)
 
-**Show:** SQL editor, queries 3 and 4 (saved as "Clean room demo 3/4"), or the same audience in Customer Lake.
+**Show:** SQL editor, query 3 (saved as "Clean room demo 3 - before and after"), then Customer Lake → Audiences →
+**Greenstar – Gen Z Trail Explorers**.
 
 ![One customer before and after](img/cleanroom/05_before_after.png)
 
-**Say:** "Here's Kristen in Cincinnati. Before, no phone and age 'unknown'. Now she has a phone, from Greenstar,
-she's Gen X, 45 to 54, a homeowner, and her top interest is running. Each value has a source column, so we always know
-what's first-party and what's licensed, and our own data always wins. This shows up in Customer Lake as one more
-1:1 table on the customer entity, so marketing can build an audience like 'homeowners whose phone came from
-Greenstar', about 2,900 people we can now reach by SMS, split by generation."
+**Say:** "Here's Kristen in Cincinnati. Before, no phone and age 'unknown'. Now she's Gen X, 45 to 54, a homeowner,
+and her top interest is running. Every value has a source column, so we always know what's first-party and what's
+licensed, and our own data always wins."
 
-![An audience built on the enriched fields](img/cleanroom/06_audience.png)
+![A Customer Lake audience built on the enriched fields](img/cleanroom/07_customerlake_audience.png)
+
+**Say:** "The enrichment is one more 1:1 table on the customer entity in Customer Lake. So marketing can build this
+in a minute: **Gen Z** (a generation we only know for many customers because of Greenstar), **Trail Running** in
+their top interests (Greenstar's summarised interest scores), and **email-contactable** (our own consent). That's 655
+people for a trail-shoe launch. Without the email filter it's about 2,400; enrichment never overrides consent."
+
+*If asked "can we text the people whose phone came from Greenstar?":* "No. A licensed phone doesn't come with SMS
+consent. We use it as an extra hashed match key on ad platforms, where the customer allows paid media."
 
 **Close:** "Two companies, no data copied between them, only the summaries that were licensed, and the whole thing
 is governed in Unity Catalog and runs on a schedule."
@@ -96,3 +103,4 @@ is governed in Unity Catalog and runs on a schedule."
 | Age band and generation added | 11,829 |
 | Generation conflicts (first-party kept) | 36 |
 | Job run time | about 4 minutes |
+| Audience "Greenstar – Gen Z Trail Explorers" | 655 (2,387 before the email-consent filter) |
