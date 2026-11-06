@@ -17,7 +17,7 @@ Clean Rooms → `strideforge_greenstar_enrichment`; a SQL editor with `demo_quer
 
 ## Step 1 – The gap (45 seconds)
 
-**Show:** SQL editor, query 1.
+**Show:** SQL editor, query 1 (saved as "Clean room demo 1 - the gap").
 
 ![The gap in StrideForge's customer profiles](img/cleanroom/01_gap.png)
 
@@ -36,6 +36,14 @@ country and two yes/no flags, 'do we have a phone' and 'do we have a birth date'
 profiling. No names, no raw emails. Greenstar shares its consumer file. Neither of us can query the other's table.
 The only thing that can touch both is code that we've both approved, running on serverless compute with no internet
 access."
+
+**Optional (10 seconds), Greenstar's side** (`partner-demo-catalog`): same room, same assets, both notebooks
+"2/2 approved", and **no output catalog**. Greenstar never receives results.
+
+![What Greenstar sees: the same room, but no output](img/cleanroom/02b_provider_view.png)
+
+*Collaborator names in the UI are the metastore organisation names: `fevm-aws-metastore-useast1` is StrideForge
+and `lighthouse` is Greenstar.*
 
 *If asked "can Greenstar see our customers?":* "No. Greenstar can't run anything here. The results go only to
 StrideForge's catalog, and Greenstar never learns who matched."
@@ -60,7 +68,7 @@ auto-approval rule covers Greenstar's notebooks that only StrideForge runs, beca
 
 ## Step 4 – The result in Customer Lake (75 seconds)
 
-**Show:** SQL editor, queries 3 and 4 (or the same audience in Customer Lake).
+**Show:** SQL editor, queries 3 and 4 (saved as "Clean room demo 3/4"), or the same audience in Customer Lake.
 
 ![One customer before and after](img/cleanroom/05_before_after.png)
 

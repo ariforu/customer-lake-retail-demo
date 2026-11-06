@@ -13,11 +13,18 @@ SELECT count(*) AS matched_customers,
        count(generation) AS with_generation
 FROM vijay_catalog.retail_cleanroom.customer_enrichment;
 
--- 3. Before and after for one customer.
-SELECT p.first_name, p.last_name, p.city,
-       p.phone_e164 AS phone_before, p.age_band AS age_band_before,
-       e.phone_e164 AS phone_after, e.phone_source, e.age_band AS age_band_after, e.generation,
-       e.income_band, e.homeowner, e.life_stage, e.top_interests
+-- 3. Before and after for one customer (StrideForge value, value after enrichment, source).
+SELECT stack(9,
+  'Name',             concat(p.first_name, ' ', p.last_name), concat(p.first_name, ' ', p.last_name), 'first_party',
+  'City',             p.city,                                 p.city,                                 'first_party',
+  'Phone',            p.phone_e164,                           e.phone_e164,                           e.phone_source,
+  'Age band',         p.age_band,                             e.age_band,                             e.age_band_source,
+  'Generation',       CAST(NULL AS STRING),                   e.generation,                           e.generation_source,
+  'Income band',      CAST(NULL AS STRING),                   e.income_band,                          'greenstar',
+  'Homeowner',        CAST(NULL AS STRING),                   CAST(e.homeowner AS STRING),            'greenstar',
+  'Life stage',       CAST(NULL AS STRING),                   e.life_stage,                           'greenstar',
+  'Top interests',    CAST(NULL AS STRING),                   array_join(e.top_interests, ', '),      'greenstar'
+) AS (field, before_clean_room, after_clean_room, source)
 FROM vijay_catalog.retail_gold.customer_profile p
 JOIN vijay_catalog.retail_cdp.customer_enrichment e USING (unified_customer_id)
 WHERE unified_customer_id = 'UC03465B308277';
