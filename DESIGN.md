@@ -435,7 +435,7 @@ notebook task**, `greenstar_enrich_customers`) → `save_enrichment`, which read
 The order matters because the job definition references the room and its notebook: the room and the notebook must
 exist before `bundle deploy`, and `cr_match_keys` must exist before StrideForge can share it.
 
-Demo script: `docs/cleanroom_demo_script.md` (also published as a Google Doc).
+Demo script: `docs/cleanroom_demo_script.md`, also published as a [Google Doc](https://docs.google.com/document/d/1sNyznAOcO2mrqVWCmt65TbG6dOEEv-O9r03sqtqQCmc/edit) (Databricks only).
 
 ### 12.6 Files
 

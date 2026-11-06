@@ -2,7 +2,7 @@
 
 **Length:** under 5 minutes, 4 steps. **Audience:** marketing and data leads.
 **Setup:** [DESIGN.md section 12](../DESIGN.md#12-module-clean-room-enrichment-greenstar-consumer-data).
-Queries: [`src/cleanroom/sql/demo_queries.sql`](../src/cleanroom/sql/demo_queries.sql).
+Queries: [`src/cleanroom/sql/demo_queries.sql`](../src/cleanroom/sql/demo_queries.sql). Google Doc version: [link](https://docs.google.com/document/d/1sNyznAOcO2mrqVWCmt65TbG6dOEEv-O9r03sqtqQCmc/edit) (Databricks only).
 
 **Story.** StrideForge, a running and outdoor retailer, wants to know its customers better. Greenstar Consumer Data,
 a consumer data provider, has detailed data on millions of people. Neither side can hand its data to the other.
